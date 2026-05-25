@@ -14,17 +14,30 @@ A [`pi`](https://github.com/earendil-works/pi) coding-agent extension that runs 
 
 ## Usage
 
-Load it with the `--extension` flag:
+### Install as a pi package (recommended)
+
+This repo ships a `pi` manifest (`package.json` → `pi.extensions`), so it installs with the package manager and updates via `pi update`:
 
 ```bash
+pi install git:github.com/grunt3714-lgtm/pi-loop
+```
+
+This writes the package to `~/.pi/agent/settings.json` and clones it to `~/.pi/agent/git/`. Use `-l` to install into project settings instead. Manage with `pi list`, `pi update`, and `pi remove git:github.com/grunt3714-lgtm/pi-loop`.
+
+> The repo is private — cloning uses your existing git credentials (e.g. `gh auth git-credential`, or SSH via `pi install git:git@github.com:grunt3714-lgtm/pi-loop`).
+
+### Alternatives
+
+```bash
+# Copy the single file into the extensions dir for auto-discovery
+cp loop.ts ~/.pi/agent/extensions/        # global
+cp loop.ts .pi/extensions/                # project-local
+
+# Try it for one run without installing
 pi --extension /path/to/pi-loop/loop.ts
 ```
 
-Or copy it into your extensions directory for auto-discovery:
-
-```bash
-cp loop.ts ~/.pi/agent/extensions/
-```
+> Don't combine the package install with a loose `extensions/loop.ts` copy — both would load and you'd get a duplicate `/loop` command (`/loop` and `/loop:1`).
 
 ## Notes & limitations
 

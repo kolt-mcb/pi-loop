@@ -1,0 +1,15 @@
+{
+  "name": "pi-loop",
+  "version": "0.1.0",
+  "description": "A pi coding-agent extension that runs a prompt or slash-command repeatedly (Claude Code-style /loop)",
+  "type": "module",
+  "keywords": ["pi", "pi-package", "pi-extension", "loop"],
+  "pi": {
+    "extensions": ["./loop.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
