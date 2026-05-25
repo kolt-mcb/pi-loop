@@ -21,6 +21,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const MAX_ITERATIONS = 100; // safety cap so a runaway loop self-terminates
@@ -115,25 +116,30 @@ export default function loopExtension(pi: ExtensionAPI) {
 	async function runIteration() {
 		timer = undefined;
 		if (!active()) return;
-		await pi.withCommandContext(async (ctx) => {
-			if (!active()) return;
-			if (!ctx.isIdle()) {
-				// User is mid-turn; retry shortly without consuming an iteration.
-				timer = setTimeout(() => void runIteration(), 1_000);
-				return;
-			}
-			if (mode === "self-paced") rescheduled = false;
-			const text = mode === "self-paced" ? payload + SELF_PACED_HINT : payload;
-			pi.sendUserMessage(text, { executeSlashCommands: true });
-			await waitForTurn(ctx);
-			if (!active()) return;
-			iterations += 1;
-			if (iterations >= MAX_ITERATIONS) {
-				stop(`reached ${MAX_ITERATIONS}-iteration cap`);
-				return;
-			}
-			scheduleNext();
-		});
+		try {
+			await pi.withCommandContext(async (ctx) => {
+				if (!active()) return;
+				if (!ctx.isIdle()) {
+					// User is mid-turn; retry shortly without consuming an iteration.
+					timer = setTimeout(() => void runIteration(), 1_000);
+					return;
+				}
+				if (mode === "self-paced") rescheduled = false;
+				const text = mode === "self-paced" ? payload + SELF_PACED_HINT : payload;
+				pi.sendUserMessage(text, { executeSlashCommands: true });
+				await waitForTurn(ctx);
+				if (!active()) return;
+				iterations += 1;
+				if (iterations >= MAX_ITERATIONS) {
+					stop(`reached ${MAX_ITERATIONS}-iteration cap`);
+					return;
+				}
+				scheduleNext();
+			});
+		} catch (error) {
+			// Never leave a dangling timer / unhandled rejection — stop cleanly.
+			stop(`error: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	function ensureWakeupTool() {
@@ -169,6 +175,17 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("loop", {
 		description: "Run a prompt or slash-command repeatedly. /loop <interval> <payload> | /loop <prompt> | /loop stop",
+		// Offer the discrete sub-commands while the first token is being typed;
+		// return null for anything else so freeform prompt text isn't disturbed.
+		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
+			if (/\s/.test(prefix)) return null; // past the first token — it's payload now
+			const items: AutocompleteItem[] = [
+				{ value: "stop", label: "stop — end the active loop" },
+				{ value: "off", label: "off — end the active loop" },
+			];
+			const filtered = items.filter((item) => item.value.startsWith(prefix));
+			return filtered.length > 0 ? filtered : null;
+		},
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			const firstToken = trimmed.split(/\s+/)[0] ?? "";
@@ -225,12 +242,14 @@ export default function loopExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Yield to the user: stop when they type their own (non-/loop) message.
-	// Filter to interactive input — our own sendUserMessage fires `input` with
-	// source "extension", which must NOT cancel the loop.
-	pi.on("input", (event) => {
-		if (active() && event.source === "interactive" && !event.text.trim().startsWith("/loop")) {
-			stop("user took over", false);
+	// Yield to the user: stop when they type their own message, and let the
+	// message itself continue through to the agent. Only interactive input
+	// reaches here for non-command text — `/loop ...` is dispatched as a command
+	// before the input event fires, and our own re-fires use source "extension".
+	pi.on("input", (event, ctx) => {
+		if (active() && event.source === "interactive") {
+			stop("you took over", false);
+			ctx.ui.notify("Loop stopped (you took over).", "info");
 		}
 		return { action: "continue" };
 	});
