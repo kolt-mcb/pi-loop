@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "A pi coding-agent extension that runs a prompt or slash-command repeatedly (Claude Code-style /loop)",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/grunt3714-lgtm/pi-loop.git"
+  },
   "keywords": ["pi", "pi-package", "pi-extension", "loop"],
   "pi": {
     "extensions": ["./loop.ts"]

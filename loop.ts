@@ -30,7 +30,6 @@ const MAX_ITERATIONS = 100; // safety cap so a runaway loop self-terminates
 const MIN_INTERVAL_MS = 1_000;
 const TURN_START_TIMEOUT_MS = 10_000; // how long to wait for a fired turn to begin streaming
 const IDLE_SETTLE_MS = 200; // gap used to confirm idle across retry/compaction segments
-const POLL_MS = 50;
 const STATUS_KEY = "loop"; // footer status slot
 const TICK_MS = 1_000; // countdown refresh interval
 
@@ -78,6 +77,8 @@ export default function loopExtension(pi: ExtensionAPI) {
 	let nextFireAt: number | null = null; // epoch ms of the next iteration, or null
 	let running = false; // a turn is currently in flight
 	let ticker: ReturnType<typeof setInterval> | undefined;
+	// One-shot resolver for the next agent_start (set while waiting for a fired turn to begin).
+	let turnStartResolver: (() => void) | null = null;
 
 	const active = () => mode !== null;
 
@@ -115,11 +116,11 @@ export default function loopExtension(pi: ExtensionAPI) {
 			const label = mode === "self-paced" ? "self-paced loop" : "loop";
 			let body: string;
 			if (running) {
-				body = `running · iter ${iterations}`;
+				body = `running · iter ${iterations + 1}`;
 			} else if (nextFireAt !== null) {
-				body = `next in ${formatRemaining(nextFireAt - Date.now())} · iter ${iterations}`;
+				body = `next in ${formatRemaining(nextFireAt - Date.now())} · ${iterations} done`;
 			} else {
-				body = `active · iter ${iterations}`;
+				body = `active · ${iterations} done`;
 			}
 			ctx.ui.setStatus(STATUS_KEY, `${theme.fg("accent", "⟳")} ${theme.fg("dim", `${label} · ${body}`)}`);
 		});
@@ -153,17 +154,39 @@ export default function loopExtension(pi: ExtensionAPI) {
 	}
 
 	/**
+	 * Resolve when the next `agent_start` fires — i.e. the fired turn actually
+	 * begins streaming. Returns `false` if it times out (payload triggered no
+	 * turn), so the caller doesn't hang. Registering the resolver right after
+	 * sendUserMessage is safe: control returns here before agent_start fires.
+	 */
+	function waitForTurnStart(): Promise<boolean> {
+		return new Promise((resolve) => {
+			let settled = false;
+			let timer: ReturnType<typeof setTimeout>;
+			const finish = (started: boolean) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				if (turnStartResolver === onStart) turnStartResolver = null;
+				resolve(started);
+			};
+			const onStart = () => finish(true);
+			timer = setTimeout(() => finish(false), TURN_START_TIMEOUT_MS);
+			turnStartResolver = onStart;
+		});
+	}
+
+	/**
 	 * Wait until a fired turn has fully completed. Robust against two hazards:
 	 *  - the start race: `activeRun` (and thus waitForIdle) isn't set the instant
-	 *    sendUserMessage returns, so we first wait for the agent to become busy;
+	 *    sendUserMessage returns — so we first wait for `agent_start`;
 	 *  - retry / auto-compaction, which split one logical turn into several agent
 	 *    run segments — each resolves waitForIdle and re-emits agent_end — so we
 	 *    only treat the turn as done once idle *settles*.
 	 */
 	async function waitForTurn(ctx: ExtensionCommandContext) {
-		const deadline = Date.now() + TURN_START_TIMEOUT_MS;
-		while (ctx.isIdle() && Date.now() < deadline) await delay(POLL_MS);
-		// If it never became busy, the payload triggered no turn; treat as done.
+		// If a turn never begins (e.g. the payload triggered none), bail out.
+		if (ctx.isIdle() && !(await waitForTurnStart())) return;
 		for (;;) {
 			await ctx.waitForIdle();
 			await delay(IDLE_SETTLE_MS);
@@ -256,7 +279,8 @@ export default function loopExtension(pi: ExtensionAPI) {
 		// Offer the discrete sub-commands while the first token is being typed;
 		// return null for anything else so freeform prompt text isn't disturbed.
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
-			if (/\s/.test(prefix)) return null; // past the first token — it's payload now
+			// Only suggest stop/off when a loop is running, and only on the first token.
+			if (!active() || /\s/.test(prefix)) return null;
 			const items: AutocompleteItem[] = [
 				{ value: "stop", label: "stop — end the active loop" },
 				{ value: "off", label: "off — end the active loop" },
@@ -332,6 +356,9 @@ export default function loopExtension(pi: ExtensionAPI) {
 		}
 		return { action: "continue" };
 	});
+
+	// Signal a pending waitForTurnStart() when the fired turn actually begins.
+	pi.on("agent_start", () => turnStartResolver?.());
 
 	// Never let a loop leak across a session change (closure scope outlives one
 	// session). session_start at startup is a harmless no-op (no active loop).
