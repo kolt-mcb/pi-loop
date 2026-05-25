@@ -20,6 +20,7 @@
  *     an iteration only fires while the agent is idle.
  *   - While a loop is active the footer shows a live countdown to the next
  *     iteration (or "running" during a turn).
+ *   - Stops itself if a turn fails to start repeatedly (e.g. no model configured).
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -27,6 +28,7 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const MAX_ITERATIONS = 100; // safety cap so a runaway loop self-terminates
+const MAX_NO_TURN = 3; // stop after this many consecutive iterations that start no turn
 const MIN_INTERVAL_MS = 1_000;
 const TURN_START_TIMEOUT_MS = 10_000; // how long to wait for a fired turn to begin streaming
 const IDLE_SETTLE_MS = 200; // gap used to confirm idle across retry/compaction segments
@@ -69,6 +71,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 	let periodMs = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let iterations = 0;
+	let consecutiveNoTurns = 0; // iterations in a row that started no turn (misconfig guard)
 	// Self-paced: did the agent request another iteration during the last turn?
 	let rescheduled = false;
 	let rescheduleDelayMs = 0;
@@ -149,6 +152,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 		mode = null;
 		payload = "";
 		iterations = 0;
+		consecutiveNoTurns = 0;
 		rescheduled = false;
 		if (announce) notify(`Loop stopped (${reason}).`);
 	}
@@ -184,13 +188,13 @@ export default function loopExtension(pi: ExtensionAPI) {
 	 *    run segments — each resolves waitForIdle and re-emits agent_end — so we
 	 *    only treat the turn as done once idle *settles*.
 	 */
-	async function waitForTurn(ctx: ExtensionCommandContext) {
-		// If a turn never begins (e.g. the payload triggered none), bail out.
-		if (ctx.isIdle() && !(await waitForTurnStart())) return;
+	/** @returns true if a turn ran, false if none began within the timeout. */
+	async function waitForTurn(ctx: ExtensionCommandContext): Promise<boolean> {
+		if (ctx.isIdle() && !(await waitForTurnStart())) return false;
 		for (;;) {
 			await ctx.waitForIdle();
 			await delay(IDLE_SETTLE_MS);
-			if (ctx.isIdle()) return;
+			if (ctx.isIdle()) return true;
 		}
 	}
 
@@ -227,9 +231,21 @@ export default function loopExtension(pi: ExtensionAPI) {
 				if (mode === "self-paced") rescheduled = false;
 				const text = mode === "self-paced" ? payload + SELF_PACED_HINT : payload;
 				pi.sendUserMessage(text, { executeSlashCommands: true });
-				await waitForTurn(ctx);
+				const turnRan = await waitForTurn(ctx);
 				running = false;
 				if (!active()) return;
+				if (!turnRan) {
+					// No turn started — likely a misconfigured session (no model/API key)
+					// or a payload that triggers nothing. Don't spin silently.
+					consecutiveNoTurns += 1;
+					if (consecutiveNoTurns >= MAX_NO_TURN) {
+						stop(`no turn started ${MAX_NO_TURN}× in a row — check the model/API key and prompt`);
+						return;
+					}
+					scheduleNext();
+					return;
+				}
+				consecutiveNoTurns = 0;
 				iterations += 1;
 				if (iterations >= MAX_ITERATIONS) {
 					stop(`reached ${MAX_ITERATIONS}-iteration cap`);

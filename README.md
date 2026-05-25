@@ -46,6 +46,7 @@ pi --extension /path/to/pi-loop/loop.ts
 - The loop **yields automatically** when you type your own message — your input cancels it.
 - The interval is a **floor**, not a guarantee: a turn longer than the period serializes, since an iteration only fires while the agent is idle.
 - A 100-iteration safety cap stops a runaway loop.
+- It stops itself if a turn fails to start **3 times in a row** (e.g. no model/API key configured), so a misconfigured session doesn't spin silently.
 - While active, the footer shows a **live countdown** to the next iteration (e.g. `⟳ loop · next in 4m12s · iter 3`), or `running` during a turn.
 
 ## How it works
