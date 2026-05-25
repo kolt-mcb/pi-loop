@@ -46,6 +46,7 @@ pi --extension /path/to/pi-loop/loop.ts
 - The loop **yields automatically** when you type your own message — your input cancels it.
 - The interval is a **floor**, not a guarantee: a turn longer than the period serializes, since an iteration only fires while the agent is idle.
 - A 100-iteration safety cap stops a runaway loop.
+- While active, the footer shows a **live countdown** to the next iteration (e.g. `⟳ loop · next in 4m12s · iter 3`), or `running` during a turn.
 
 ## How it works
 
@@ -56,6 +57,7 @@ The extension is built entirely on pi's public extension API:
 - `ctx.isIdle()` / `ctx.waitForIdle()` gate firing and detect turn completion. Because retries and auto-compaction split one logical turn into several agent-run segments, the extension waits for idle to *settle* rather than trusting a single `agent_end`.
 - Self-paced mode registers a `schedule_loop_wakeup` tool the agent calls to request another iteration.
 - The `input` event yields to the user — filtered to `source === "interactive"` so the loop's own re-fires (`source: "extension"`) don't cancel it.
+- A 1-second ticker updates the footer countdown via `ctx.ui.setStatus()`; it's `unref`'d (never blocks exit) and no-ops without a UI.
 
 ## License
 

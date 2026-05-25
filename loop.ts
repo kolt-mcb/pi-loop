@@ -18,6 +18,8 @@
  *   - The loop yields automatically when you type your own message.
  *   - The interval is a floor: a turn longer than the period serializes, since
  *     an iteration only fires while the agent is idle.
+ *   - While a loop is active the footer shows a live countdown to the next
+ *     iteration (or "running" during a turn).
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -29,6 +31,8 @@ const MIN_INTERVAL_MS = 1_000;
 const TURN_START_TIMEOUT_MS = 10_000; // how long to wait for a fired turn to begin streaming
 const IDLE_SETTLE_MS = 200; // gap used to confirm idle across retry/compaction segments
 const POLL_MS = 50;
+const STATUS_KEY = "loop"; // footer status slot
+const TICK_MS = 1_000; // countdown refresh interval
 
 const SELF_PACED_HINT =
 	"\n\n[Self-paced loop: call the schedule_loop_wakeup tool at the END of your turn to run this again, or omit it to end the loop.]";
@@ -47,6 +51,17 @@ function parseDuration(token: string): number | null {
 	return value * multiplier;
 }
 
+/** Compact "1h05m" / "5m03s" / "12s" rendering of a remaining duration. */
+function formatRemaining(ms: number): string {
+	const total = Math.max(0, Math.ceil(ms / 1000));
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	if (h > 0) return `${h}h${String(m).padStart(2, "0")}m`;
+	if (m > 0) return `${m}m${String(s).padStart(2, "0")}s`;
+	return `${s}s`;
+}
+
 export default function loopExtension(pi: ExtensionAPI) {
 	// Single active loop, held in module/closure scope (so it outlives one turn
 	// but is reset on session change below).
@@ -59,6 +74,10 @@ export default function loopExtension(pi: ExtensionAPI) {
 	let rescheduled = false;
 	let rescheduleDelayMs = 0;
 	let wakeupToolRegistered = false;
+	// Footer countdown state.
+	let nextFireAt: number | null = null; // epoch ms of the next iteration, or null
+	let running = false; // a turn is currently in flight
+	let ticker: ReturnType<typeof setInterval> | undefined;
 
 	const active = () => mode !== null;
 
@@ -73,9 +92,59 @@ export default function loopExtension(pi: ExtensionAPI) {
 		}
 	}
 
+	// --- Footer countdown -----------------------------------------------------
+
+	function stopTicker() {
+		if (ticker) {
+			clearInterval(ticker);
+			ticker = undefined;
+		}
+	}
+
+	function renderStatus() {
+		void pi.withCommandContext((ctx) => {
+			if (!active()) {
+				ctx.ui.setStatus(STATUS_KEY, undefined);
+				return;
+			}
+			if (!ctx.hasUI) {
+				stopTicker(); // nothing to paint in non-interactive modes
+				return;
+			}
+			const theme = ctx.ui.theme;
+			const label = mode === "self-paced" ? "self-paced loop" : "loop";
+			let body: string;
+			if (running) {
+				body = `running · iter ${iterations}`;
+			} else if (nextFireAt !== null) {
+				body = `next in ${formatRemaining(nextFireAt - Date.now())} · iter ${iterations}`;
+			} else {
+				body = `active · iter ${iterations}`;
+			}
+			ctx.ui.setStatus(STATUS_KEY, `${theme.fg("accent", "⟳")} ${theme.fg("dim", `${label} · ${body}`)}`);
+		});
+	}
+
+	function startTicker() {
+		if (ticker) return;
+		renderStatus(); // immediate paint, then refresh every second
+		ticker = setInterval(renderStatus, TICK_MS);
+		ticker.unref?.(); // purely cosmetic — never keep the process alive
+	}
+
+	function clearStatus() {
+		stopTicker();
+		nextFireAt = null;
+		running = false;
+		void pi.withCommandContext((ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+	}
+
+	// --- Loop control ---------------------------------------------------------
+
 	function stop(reason: string, announce = true) {
 		if (!active()) return;
 		clearTimer();
+		clearStatus();
 		mode = null;
 		payload = "";
 		iterations = 0;
@@ -104,13 +173,18 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 	function scheduleNext() {
 		if (!active()) return;
+		running = false;
 		if (mode === "interval") {
+			nextFireAt = Date.now() + periodMs;
 			timer = setTimeout(() => void runIteration(), periodMs);
 		} else if (rescheduled) {
+			nextFireAt = Date.now() + rescheduleDelayMs;
 			timer = setTimeout(() => void runIteration(), rescheduleDelayMs);
 		} else {
 			stop("agent did not reschedule");
+			return;
 		}
+		renderStatus();
 	}
 
 	async function runIteration() {
@@ -124,10 +198,14 @@ export default function loopExtension(pi: ExtensionAPI) {
 					timer = setTimeout(() => void runIteration(), 1_000);
 					return;
 				}
+				running = true;
+				nextFireAt = null;
+				renderStatus();
 				if (mode === "self-paced") rescheduled = false;
 				const text = mode === "self-paced" ? payload + SELF_PACED_HINT : payload;
 				pi.sendUserMessage(text, { executeSlashCommands: true });
 				await waitForTurn(ctx);
+				running = false;
 				if (!active()) return;
 				iterations += 1;
 				if (iterations >= MAX_ITERATIONS) {
@@ -236,6 +314,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 				ctx.ui.notify(`Self-paced loop started → ${payload}`, "info");
 			}
 
+			startTicker();
 			// Kick off on the next tick so the current command dispatch fully
 			// unwinds before the first iteration's prompt() begins.
 			timer = setTimeout(() => void runIteration(), 0);
