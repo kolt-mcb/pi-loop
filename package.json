@@ -1,5 +1,5 @@
 {
-  "name": "@kolt-mcb/pi-loop",
+  "name": "@koltmcbride/pi-loop",
   "version": "0.1.0",
   "description": "A pi coding-agent extension that runs a prompt or slash-command repeatedly (Claude Code-style /loop)",
   "type": "module",

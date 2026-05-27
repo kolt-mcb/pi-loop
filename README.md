@@ -24,7 +24,7 @@ Automate repetitive workflows inside pi by scheduling a prompt or command to run
 From npm:
 
 ```bash
-pi install npm:@kolt-mcb/pi-loop
+pi install npm:@koltmcbride/pi-loop
 ```
 
 From git:
