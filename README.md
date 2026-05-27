@@ -19,10 +19,10 @@ A [`pi`](https://github.com/earendil-works/pi) coding-agent extension that runs 
 This repo ships a `pi` manifest (`package.json` → `pi.extensions`), so it installs with the package manager and updates via `pi update`:
 
 ```bash
-pi install git:github.com/grunt3714-lgtm/pi-loop@v0.1.0
+pi install git:github.com/kolt-mcb/pi-loop@v0.1.0
 ```
 
-This writes the package to `~/.pi/agent/settings.json` and clones it to `~/.pi/agent/git/`. Use `-l` to install into project settings instead. Manage with `pi list`, `pi update`, and `pi remove git:github.com/grunt3714-lgtm/pi-loop`.
+This writes the package to `~/.pi/agent/settings.json` and clones it to `~/.pi/agent/git/`. Use `-l` to install into project settings instead. Manage with `pi list`, `pi update`, and `pi remove git:github.com/kolt-mcb/pi-loop`.
 
 ### Alternatives
 

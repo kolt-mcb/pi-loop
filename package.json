@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/grunt3714-lgtm/pi-loop.git"
+    "url": "git+https://github.com/kolt-mcb/pi-loop.git"
   },
   "keywords": ["pi", "pi-package", "pi-extension", "loop"],
   "pi": {
