@@ -1,14 +1,22 @@
 {
-  "name": "pi-loop",
+  "name": "@kolt-mcb/pi-loop",
   "version": "0.1.0",
   "description": "A pi coding-agent extension that runs a prompt or slash-command repeatedly (Claude Code-style /loop)",
   "type": "module",
   "license": "MIT",
+  "author": "Kolt McBride",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kolt-mcb/pi-loop.git"
   },
-  "keywords": ["pi", "pi-package", "pi-extension", "loop"],
+  "bugs": {
+    "url": "https://github.com/kolt-mcb/pi-loop/issues"
+  },
+  "homepage": "https://github.com/kolt-mcb/pi-loop#readme",
+  "keywords": ["pi", "pi-package", "pi-extension", "loop", "automation"],
   "pi": {
     "extensions": ["./loop.ts"]
   },

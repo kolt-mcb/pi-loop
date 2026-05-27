@@ -21,11 +21,19 @@ Automate repetitive workflows inside pi by scheduling a prompt or command to run
 
 ## Installation
 
+From npm:
+
+```bash
+pi install npm:@kolt-mcb/pi-loop
+```
+
+From git:
+
 ```bash
 pi install git:github.com/kolt-mcb/pi-loop@v0.1.0
 ```
 
-This clones the package into `~/.pi/agent/git/` and registers it in your global settings. Use `-l` to install into project-local settings (`.pi/settings.json`) instead.
+This clones/downloads the package and registers it in your global settings. Use `-l` to install into project-local settings (`.pi/settings.json`) instead.
 
 Verify it's loaded:
 
