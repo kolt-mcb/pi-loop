@@ -1,63 +1,142 @@
 # pi-loop
 
-A [`pi`](https://github.com/earendil-works/pi) coding-agent extension that runs a prompt or slash-command **repeatedly**, modelled on Claude Code's `/loop`.
+A [pi](https://github.com/earendil-works/pi) extension that runs a prompt or slash-command **repeatedly**, modelled on Claude Code's `/loop`.
 
-## Modes
+## Overview
 
-| Command | Behaviour |
-|---|---|
-| `/loop 5m /run-tests` | **Interval** — re-fires the payload every 5 minutes |
-| `/loop 30s say hi` | Interval with a plain prompt (`s`/`m`/`h`, bare number = seconds) |
-| `/loop keep fixing lint` | **Self-paced** — the agent decides when to continue by calling the `schedule_loop_wakeup` tool; the loop ends as soon as it stops calling it |
-| `/loop stop` (or `/loop off`) | Stop the active loop |
-| `/loop` | Show status / usage |
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
+[![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
+[![Version](https://img.shields.io/badge/version-%40v0.1.0-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.1.0)
 
-## Usage
+Automate repetitive workflows inside pi by scheduling a prompt or command to run on an interval or at the agent's own pace — with a live status indicator and automatic user yield.
 
-### Install as a pi package (recommended)
+## Features
 
-This repo ships a `pi` manifest (`package.json` → `pi.extensions`), so it installs with the package manager and updates via `pi update`:
+- **Interval mode** — fire a payload every `N` seconds, minutes, or hours
+- **Self-paced mode** — let the agent decide when to continue via a built-in tool
+- **Live countdown** — footer status bar shows time remaining and iteration count
+- **User yield** — typing any message instantly cancels the loop and passes control to you
+- **Safety caps** — automatic termination after 100 iterations or 3 consecutive no-ops
+- **Slash-expansion** — interval payloads that begin with `/` are expanded as pi commands
+
+## Installation
 
 ```bash
 pi install git:github.com/kolt-mcb/pi-loop@v0.1.0
 ```
 
-This writes the package to `~/.pi/agent/settings.json` and clones it to `~/.pi/agent/git/`. Use `-l` to install into project settings instead. Manage with `pi list`, `pi update`, and `pi remove git:github.com/kolt-mcb/pi-loop`.
+This clones the package into `~/.pi/agent/git/` and registers it in your global settings. Use `-l` to install into project-local settings (`.pi/settings.json`) instead.
+
+Verify it's loaded:
+
+```bash
+pi list
+```
+
+## Quick Start
+
+Run tests every 5 minutes:
+
+```
+/loop 5m /run-tests
+```
+
+Tell the agent to self-correct continuously:
+
+```
+/loop keep refining until the code is production-ready
+```
+
+Stop any active loop at any time:
+
+```
+/loop stop
+```
+
+## Usage
+
+### Interval Mode
+
+Append a duration token (`s`, `m`, or `h`) before the payload:
+
+| Syntax                | Meaning                        |
+|-----------------------|--------------------------------|
+| `/loop 30s say hello` | Run `say hello` every 30 seconds |
+| `/loop 5m /run-tests` | Run `/run-tests` every 5 minutes |
+| `/loop 2h deploy`     | Run `deploy` every 2 hours     |
+
+When no unit is specified the number is treated as seconds (`/loop 60 check health`).
+
+### Self-Paced Mode
+
+Omit the duration token to let the agent control the loop cadence:
+
+```
+/loop poke the refactoring until it passes CI
+```
+
+The agent calls a `schedule_loop_wakeup` tool at the end of each turn to request another iteration. Cycle again or stop whenever.
+
+### Status and Control
+
+| Command           | Action                                       |
+|-------------------|----------------------------------------------|
+| `/loop`           | Show current status or usage help            |
+| `/loop stop`      | Stop the active loop                         |
+| `/loop off`       | Alias for `stop`                             |
 
 ### Alternatives
 
 ```bash
-# Copy the single file into the extensions dir for auto-discovery
-cp loop.ts ~/.pi/agent/extensions/        # global
-cp loop.ts .pi/extensions/                # project-local
+# Copy for auto-discovery (global scope)
+cp loop.ts ~/.pi/agent/extensions/
 
-# Try it for one run without installing
+# Copy for auto-discovery (project scope)
+cp loop.ts .pi/extensions/
+
+# Test one-shot without installing
 pi --extension /path/to/pi-loop/loop.ts
 ```
 
-> Don't combine the package install with a loose `extensions/loop.ts` copy — both would load and you'd get a duplicate `/loop` command (`/loop` and `/loop:1`).
+> **Avoid duplication** — don't combine the package install with a loose `extensions/loop.ts` copy. Both locations load, producing a conflicting `/loop:1` command.
 
-## Notes & limitations
+## Live Status
 
-- Only **one** loop runs at a time.
-- Loops do **not** survive a restart or a session switch (they are cancelled on `session_start`/`session_shutdown`).
-- The loop **yields automatically** when you type your own message — your input cancels it.
-- The interval is a **floor**, not a guarantee: a turn longer than the period serializes, since an iteration only fires while the agent is idle.
-- A 100-iteration safety cap stops a runaway loop.
-- It stops itself if a turn fails to start **3 times in a row** (e.g. no model/API key configured), so a misconfigured session doesn't spin silently.
-- While active, the footer shows a **live countdown** to the next iteration (e.g. `⟳ loop · next in 4m12s · iter 3`), or `running` during a turn.
+While a loop is active, the pi footer displays a real-time countdown:
 
-## How it works
+```
+⟳ loop · next in 4m12s · iter 3 done
+#             or during an in-flight turn:
+⟳ loop · running · iter 4
+```
 
-The extension is built entirely on pi's public extension API:
+## Configuration
 
-- `pi.sendUserMessage(payload, { executeSlashCommands: true })` re-fires the payload each iteration, expanding a leading `/command` exactly like interactive input.
-- `pi.withCommandContext(...)` synthesises a command context from the timer/tool callbacks (which otherwise have none).
-- `ctx.isIdle()` / `ctx.waitForIdle()` gate firing and detect turn completion. Because retries and auto-compaction split one logical turn into several agent-run segments, the extension waits for idle to *settle* rather than trusting a single `agent_end`.
-- Self-paced mode registers a `schedule_loop_wakeup` tool the agent calls to request another iteration.
-- The `input` event yields to the user — filtered to `source === "interactive"` so the loop's own re-fires (`source: "extension"`) don't cancel it.
-- A 1-second ticker updates the footer countdown via `ctx.ui.setStatus()`; it's `unref`'d (never blocks exit) and no-ops without a UI.
+| Setting              | Default | Description                                    |
+|----------------------|---------|------------------------------------------------|
+| `MAX_ITERATIONS`     | `100`   | Absolute safety cap; the loop self-terminates  |
+| `MAX_NO_TURN`        | `3`     | Stop after this many turnovers that start no turn |
+| `MIN_INTERVAL_MS`    | `1000`  | Minimum interval in milliseconds               |
+| `TURN_START_TIMEOUT` | `10s`   | How long to wait for a fired turn to begin     |
+
+These are compiled into the extension source. Adjust at the top of `loop.ts` as needed.
+
+## Known Limitations
+
+- **Single loop only** — only one loop is active at any given time.
+- **No persistence** — loops do not survive restarts or session switches; they are cancelled on shutdown.
+- **Floor intervals** — the interval is a minimum gap. Turns that exceed the period serialize because the loop only fires while the agent is idle.
+
+## How It Works
+
+The extension uses only pi's public API:
+
+1. `pi.sendUserMessage()` re-fires the payload each iteration, with full slash-command expansion.
+2. `ctx.isIdle()` / `ctx.waitForIdle()` gate firing; due to retries and auto-compaction splitting logical turns into several segments, the extension waits for idle to *settle* rather than trusting a single `agent_end` event.
+3. Self-paced mode registers a `schedule_loop_wakeup` tool the agent invokes to request another iteration.
+4. The `input` event handler detects `source === "interactive"` to yield control when the user types, while ignoring the loop's own re-fires (`source: "extension"`).
+5. A 1-second `setInterval` ticker drives the footer countdown via `ctx.ui.setStatus()`.
 
 ## License
 
-MIT
+[MIT](LICENSE)
