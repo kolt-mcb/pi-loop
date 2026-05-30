@@ -6,18 +6,17 @@ A [pi](https://github.com/earendil-works/pi) extension that runs a prompt or sla
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
 [![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
-[![Version](https://img.shields.io/badge/version-%40v0.1.0-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.1.0)
+[![Version](https://img.shields.io/badge/version-%40v0.1.8-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.1.8)
 
 Automate repetitive workflows inside pi by scheduling a prompt or command to run on an interval or at the agent's own pace — with a live status indicator and automatic user yield.
 
 ## Features
 
-- **Interval mode** — fire a payload every `N` seconds, minutes, or hours
-- **Self-paced mode** — let the agent decide when to continue via a built-in tool
+- **Self-paced loop** — the agent decides whether (and when) to continue each turn via a built-in `schedule_loop_wakeup` tool; pass a cadence in plain language and the model schedules the delay
 - **Live countdown** — footer status bar shows time remaining and iteration count
 - **User yield** — typing any message instantly cancels the loop and passes control to you
 - **Safety caps** — automatic termination after 100 iterations or 3 consecutive no-ops
-- **Slash-expansion** — interval payloads that begin with `/` are expanded as pi commands
+- **Slash-expansion** — payloads that begin with `/` are expanded as pi commands
 
 ## Installation
 
@@ -30,7 +29,7 @@ pi install npm:@koltmcbride/pi-loop
 From git:
 
 ```bash
-pi install git:github.com/kolt-mcb/pi-loop@v0.1.0
+pi install git:github.com/kolt-mcb/pi-loop@v0.1.8
 ```
 
 This clones/downloads the package and registers it in your global settings. Use `-l` to install into project-local settings (`.pi/settings.json`) instead.
@@ -43,13 +42,13 @@ pi list
 
 ## Quick Start
 
-Run tests every 5 minutes:
+Run tests roughly every 5 minutes (the agent schedules the gap):
 
 ```
-/loop 5m /run-tests
+/loop every 5 minutes run the tests and fix any failures
 ```
 
-Tell the agent to self-correct continuously:
+Tell the agent to self-correct continuously, as fast as it can:
 
 ```
 /loop keep refining until the code is production-ready
@@ -63,27 +62,19 @@ Stop any active loop at any time:
 
 ## Usage
 
-### Interval Mode
+Everything after `/loop` is the payload, sent to the agent verbatim each iteration. There is a single self-paced mode: the agent decides whether to continue and how long to wait by calling the built-in `schedule_loop_wakeup` tool at the end of its turn. If it omits the call, the loop ends.
 
-Append a duration token (`s`, `m`, or `h`) before the payload:
+### Cadence
 
-| Syntax                | Meaning                        |
-|-----------------------|--------------------------------|
-| `/loop 30s say hello` | Run `say hello` every 30 seconds |
-| `/loop 5m /run-tests` | Run `/run-tests` every 5 minutes |
-| `/loop 2h deploy`     | Run `deploy` every 2 hours     |
+Express the interval in plain language inside the payload — the model interprets it and passes a `delaySeconds` to the tool:
 
-When no unit is specified the number is treated as seconds (`/loop 60 check health`).
+| Syntax                                       | Behaviour                                  |
+|----------------------------------------------|--------------------------------------------|
+| `/loop every 30 seconds say hello`           | Agent reschedules ~30s after each turn     |
+| `/loop every 5 minutes run /run-tests`       | Agent reschedules ~5m after each turn      |
+| `/loop keep going until CI is green`         | No delay — re-fires as soon as it's idle   |
 
-### Self-Paced Mode
-
-Omit the duration token to let the agent control the loop cadence:
-
-```
-/loop poke the refactoring until it passes CI
-```
-
-The agent calls a `schedule_loop_wakeup` tool at the end of each turn to request another iteration. Cycle again or stop whenever.
+The interval is a floor, not a guarantee: it is the delay the agent *requests* after a turn finishes, so turns longer than the interval simply serialize. A payload beginning with `/` (e.g. `run /run-tests`) is expanded as a pi slash-command.
 
 ### Status and Control
 
@@ -120,14 +111,14 @@ While a loop is active, the pi footer displays a real-time countdown:
 
 ## Configuration
 
-| Setting              | Default | Description                                    |
-|----------------------|---------|------------------------------------------------|
-| `MAX_ITERATIONS`     | `100`   | Absolute safety cap; the loop self-terminates  |
-| `MAX_NO_TURN`        | `3`     | Stop after this many turnovers that start no turn |
-| `MIN_INTERVAL_MS`    | `1000`  | Minimum interval in milliseconds               |
-| `TURN_START_TIMEOUT` | `10s`   | How long to wait for a fired turn to begin     |
+| Setting          | Default  | Description                                             |
+|------------------|----------|---------------------------------------------------------|
+| `MAX_ITERATIONS` | `100`    | Absolute safety cap; the loop self-terminates           |
+| `MAX_NO_TURN`    | `3`      | Stop after this many iterations that start no turn      |
+| `IDLE_SETTLE_MS` | `200`    | Settle gap across retry/compaction segments before re-firing |
+| `TICK_MS`        | `1000`   | Footer countdown refresh interval                       |
 
-These are compiled into the extension source. Adjust at the top of `loop.ts` as needed.
+These are constants at the top of `loop.ts`. Adjust as needed. (The 10s wait for a fired turn to begin is hardcoded in `waitForTurnStart`.)
 
 ## Known Limitations
 
@@ -141,7 +132,7 @@ The extension uses only pi's public API:
 
 1. `pi.sendUserMessage()` re-fires the payload each iteration, with full slash-command expansion.
 2. `ctx.isIdle()` / `ctx.waitForIdle()` gate firing; due to retries and auto-compaction splitting logical turns into several segments, the extension waits for idle to *settle* rather than trusting a single `agent_end` event.
-3. Self-paced mode registers a `schedule_loop_wakeup` tool the agent invokes to request another iteration.
+3. A `schedule_loop_wakeup` tool is registered for the agent to invoke (with an optional `delaySeconds`) to request another iteration; not calling it ends the loop.
 4. The `input` event handler detects `source === "interactive"` to yield control when the user types, while ignoring the loop's own re-fires (`source: "extension"`).
 5. A 1-second `setInterval` ticker drives the footer countdown via `ctx.ui.setStatus()`.
 

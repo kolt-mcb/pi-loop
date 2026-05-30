@@ -271,7 +271,9 @@ class Loop {
 					Type.Number({ description: "Optional delay in seconds before the next iteration." }),
 				),
 			}),
-			async execute(_toolCallId, params) {
+			// Arrow fn → `this` is lexically the Loop instance, regardless of how
+			// pi invokes execute() (method shorthand would rebind `this`).
+			execute: async (_toolCallId, params) => {
 				if (this.mode !== "self-paced") {
 					return {
 						content: [{ type: "text", text: "No active self-paced loop; ignoring." }],
@@ -308,9 +310,8 @@ export default function loopExtension(pi: ExtensionAPI) {
 				{ value: "stop", label: "stop — end the active loop" },
 				{ value: "off", label: "off — end the active loop" },
 			];
-			return items.filter((i) => i.value.startsWith(prefix)).length > 0
-				? items.filter((i) => i.value.startsWith(prefix))
-				: null;
+			const matches = items.filter((i) => i.value.startsWith(prefix));
+			return matches.length > 0 ? matches : null;
 		},
 
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -346,6 +347,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 			// Everything after /loop is the payload — the model interprets interval
 			loop.ensureWakeupTool();
+			loop.mode = "self-paced";
 			loop.payload = trimmed;
 			loop.iterations = 0;
 			notify(`Loop started → ${loop.payload}`);
