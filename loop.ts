@@ -89,7 +89,8 @@ class Loop {
 	// ── Status bar ────────────────────────────────────────────────────────
 
 	private renderStatus(): void {
-		void this.api.withCommandContext((ctx) => {
+		try {
+			void this.api.withCommandContext((ctx) => {
 			if (!this.active) {
 				ctx.ui.setStatus(STATUS_KEY, undefined);
 				return;
@@ -110,6 +111,10 @@ class Loop {
 				`${theme.fg("accent", "⟳")} ${theme.fg("dim", `loop · ${body}`)}`,
 			);
 		});
+		} catch {
+			// Session may have changed; ticker will clean up
+			this.stopTicker();
+		}
 	}
 
 	startTicker() {
@@ -123,7 +128,11 @@ class Loop {
 		this.stopTicker();
 		this.nextFireAt = null;
 		this.running = false;
-		void this.api.withCommandContext((ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+		try {
+			void this.api.withCommandContext((ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+		} catch {
+			// Session may have changed
+		}
 	}
 
 	// ── Stop ──────────────────────────────────────────────────────────────
@@ -137,7 +146,11 @@ class Loop {
 		this.iterations = 0;
 		this.consecutiveNoTurns = 0;
 		this.rescheduled = false;
-		if (announce) void this.api.withCommandContext((ctx) => ctx.ui.notify(`Loop stopped (${reason}).`));
+		try {
+			if (announce) void this.api.withCommandContext((ctx) => ctx.ui.notify(`Loop stopped (${reason}).`));
+		} catch {
+			// Session may have changed
+		}
 	}
 
 	// ── Turn waiting ──────────────────────────────────────────────────────
