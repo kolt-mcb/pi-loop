@@ -1,140 +1,117 @@
 # pi-loop
 
-A [pi](https://github.com/earendil-works/pi) extension that runs a prompt or slash-command **repeatedly**, modelled on Claude Code's `/loop`.
+A [pi](https://github.com/earendil-works/pi) extension that runs a prompt **repeatedly** — on a fixed timer, when a pi event fires, or at the agent's own pace. Modelled on Claude Code's `/loop`.
 
 ## Overview
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
 [![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
-[![Version](https://img.shields.io/badge/version-%40v0.1.8-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.1.8)
+[![Version](https://img.shields.io/badge/version-%40v0.2.0-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.2.0)
 
-Automate repetitive workflows inside pi by scheduling a prompt or command to run on an interval or at the agent's own pace — with a live status indicator and automatic user yield.
+Schedule a prompt to run repeatedly inside pi. An interval is parsed at the command layer into a cron schedule and run by a **self-re-arming timer**, so the loop keeps going on its own — the model is never responsible for keeping it alive. A self-paced mode is kept for "let the model decide when there's nothing left to do."
+
+## What changed in 0.2.0
+
+Earlier versions had a single **self-paced** mode: the model had to call a wakeup tool at the end of every turn or the loop ended. That meant a turn ending on a summary silently killed the loop, and an interval like `15m` written in the prompt was never actually a cadence — just text.
+
+0.2.0 makes a parsed interval **authoritative and timer-driven**, adds **event** and **hybrid** triggers, **multiple concurrent loops**, and **persistence** that restores unexpired loops on resume. Self-paced remains as a second mode.
 
 ## Features
 
-- **Self-paced loop** — the agent decides whether (and when) to continue each turn via a built-in `schedule_loop_wakeup` tool; pass a cadence in plain language and the model schedules the delay
-- **Live countdown** — footer status bar shows time remaining and iteration count
-- **User yield** — typing any message instantly cancels the loop and passes control to you
-- **Safety caps** — automatic termination after 100 iterations or 3 consecutive no-ops
-- **Slash-expansion** — payloads that begin with `/` are expanded as pi commands
+- **Fixed-interval loops** — `/loop 15m <prompt>` parses the interval into cron and runs it on a self-re-arming timer. Continuation is the default.
+- **Self-paced loops** — `/loop <prompt>` (no interval) fires once, then continues only if the model calls `schedule_loop_wakeup`. It may end the loop by not calling it.
+- **Event & hybrid triggers** — fire on a pi event (e.g. `tool_execution_end`, `turn_end`, `monitor:done`) instead of polling, or combine cron + event with debounce.
+- **Multiple loops** — run several at once; manage with `LoopCreate` / `LoopList` / `LoopDelete` or `/loop list`.
+- **Persistence** — loops are stored under `.pi/loops` and restored, if unexpired, on `--resume`/`--continue`.
+- **Safety caps** — per-loop `maxFires` and an automatic 7-day expiry; jittered fire times avoid API stampedes.
+- **Read-only mode** — restrict a loop's fires to read/inspection tools.
+- **Live status** — a footer indicator and widget list active loops with next-fire countdowns.
 
 ## Installation
 
-From npm:
-
 ```bash
 pi install npm:@koltmcbride/pi-loop
+# or
+pi install git:github.com/kolt-mcb/pi-loop@v0.2.0
 ```
 
-From git:
+Verify it's loaded with `pi list`.
 
-```bash
-pi install git:github.com/kolt-mcb/pi-loop@v0.1.8
-```
-
-This clones/downloads the package and registers it in your global settings. Use `-l` to install into project-local settings (`.pi/settings.json`) instead.
-
-Verify it's loaded:
-
-```bash
-pi list
-```
-
-## Quick Start
-
-Run tests roughly every 5 minutes (the agent schedules the gap):
+## Quick start
 
 ```
-/loop every 5 minutes run the tests and fix any failures
+/loop 5m check if the deployment finished and report what happened
 ```
-
-Tell the agent to self-correct continuously, as fast as it can:
-
-```
-/loop keep refining until the code is production-ready
-```
-
-Stop any active loop at any time:
+Fixed 5-minute loop. Runs until you stop it, 7 days pass, or it hits a fire cap.
 
 ```
-/loop stop
+/loop check whether CI passed and address review comments
+```
+Self-paced: the model works, then decides whether to continue via `schedule_loop_wakeup` (and at what delay).
+
+```
+/loop stop          # stop all active loops
+/loop stop 3        # stop loop #3
+/loop list          # show / manage active loops
 ```
 
 ## Usage
 
-Everything after `/loop` is the payload, sent to the agent verbatim each iteration. There is a single self-paced mode: the agent decides whether to continue and how long to wait by calling the built-in `schedule_loop_wakeup` tool at the end of its turn. If it omits the call, the loop ends.
+### `/loop` command
 
-### Cadence
+| Input | Behaviour |
+|---|---|
+| `/loop 15m <prompt>` | Fixed-interval (cron) loop. Interval may also trail: `<prompt> every 2 hours`. |
+| `/loop 0 9 * * 1-5 <prompt>` | Full 5-field cron schedule. |
+| `/loop <prompt>` | Self-paced loop (model-driven cadence). |
+| `/loop list` | List/manage active loops. |
+| `/loop stop [id]` | Stop all loops, or one by id. |
 
-Express the interval in plain language inside the payload — the model interprets it and passes a `delaySeconds` to the tool:
+Intervals use `s` / `m` / `h` / `d`. Sub-minute rounds up to one minute (cron's floor); odd intervals like `7m` snap to the nearest clean cron step and the loop tells you what it picked.
 
-| Syntax                                       | Behaviour                                  |
-|----------------------------------------------|--------------------------------------------|
-| `/loop every 30 seconds say hello`           | Agent reschedules ~30s after each turn     |
-| `/loop every 5 minutes run /run-tests`       | Agent reschedules ~5m after each turn      |
-| `/loop keep going until CI is green`         | No delay — re-fires as soon as it's idle   |
+### Tools (for the agent)
 
-The interval is a floor, not a guarantee: it is the delay the agent *requests* after a turn finishes, so turns longer than the interval simply serialize. A payload beginning with `/` (e.g. `run /run-tests`) is expanded as a pi slash-command.
+| Tool | What it does |
+|---|---|
+| `LoopCreate` | Schedule a loop on a cron timer, a pi event, or a hybrid of both. Supports `recurring`, `readOnly`, `maxFires`, `filter`. |
+| `LoopList` | List loops with ids, triggers, fire counts, next-fire times. |
+| `LoopDelete` | Delete a loop, or `action="pause"` to keep it without firing. |
+| `schedule_loop_wakeup` | Continue the active **self-paced** loop; optional `delaySeconds`. Omit to end it. |
 
-### Status and Control
+Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event-bus channel; lifecycle events `tool_execution_start/end`, `turn_start/end`, `agent_start/end`, `message_end` are bridged through), or `hybrid` (both, debounced).
 
-| Command           | Action                                       |
-|-------------------|----------------------------------------------|
-| `/loop`           | Show current status or usage help            |
-| `/loop stop`      | Stop the active loop                         |
-| `/loop off`       | Alias for `stop`                             |
+## Behaviour notes
 
-### Alternatives
-
-```bash
-# Copy for auto-discovery (global scope)
-cp loop.ts ~/.pi/agent/extensions/
-
-# Copy for auto-discovery (project scope)
-cp loop.ts .pi/extensions/
-
-# Test one-shot without installing
-pi --extension /path/to/pi-loop/loop.ts
-```
-
-> **Avoid duplication** — don't combine the package install with a loose `extensions/loop.ts` copy. Both locations load, producing a conflicting `/loop:1` command.
-
-## Live Status
-
-While a loop is active, the pi footer displays a real-time countdown:
-
-```
-⟳ loop · next in 4m12s · iter 3 done
-#             or during an in-flight turn:
-⟳ loop · running · iter 4
-```
+- **Fires land between turns.** Each fire is delivered as a follow-up message, so it waits for the current turn to finish. A recurring fire is skipped while a message is already queued, so ticks never stack.
+- **Takeover.** Typing while a **self-paced** loop is waiting ends it (you took over). Fixed and event loops keep running across your messages until you `/loop stop` them.
+- **No catch-up.** If fires were missed while busy, the loop fires once when idle, not once per missed interval.
 
 ## Configuration
 
-| Setting          | Default  | Description                                             |
-|------------------|----------|---------------------------------------------------------|
-| `MAX_ITERATIONS` | `100`    | Absolute safety cap; the loop self-terminates           |
-| `MAX_NO_TURN`    | `3`      | Stop after this many iterations that start no turn      |
-| `IDLE_SETTLE_MS` | `200`    | Settle gap across retry/compaction segments before re-firing |
-| `TICK_MS`        | `1000`   | Footer countdown refresh interval                       |
+| Variable | Effect | Default |
+|---|---|---|
+| `PI_LOOP` | `off` disables persistence (in-memory only); an absolute or relative path sets a custom store file | `.pi/loops/loops-<sessionId>.json` |
 
-These are constants at the top of `loop.ts`. Adjust as needed. (The 10s wait for a fired turn to begin is hardcoded in `waitForTurnStart`.)
+Constants at the top of `loop.ts` / `src/`: status tick interval, default hybrid debounce, and the bridged lifecycle event list. Caps: 25 active loops, 7-day expiry.
 
-## Known Limitations
+## Development
 
-- **Single loop only** — only one loop is active at any given time.
-- **No persistence** — loops do not survive restarts or session switches; they are cancelled on shutdown.
-- **Floor intervals** — the interval is a minimum gap. Turns that exceed the period serialize because the loop only fires while the agent is idle.
+```bash
+npm install
+npm run typecheck   # tsc --noEmit
+npm test            # node:test via tsx — covers parsing, cron, jitter
+```
 
-## How It Works
+Source layout:
 
-The extension uses only pi's public API:
-
-1. `pi.sendUserMessage()` re-fires the payload each iteration, with full slash-command expansion.
-2. `ctx.isIdle()` / `ctx.waitForIdle()` gate firing; due to retries and auto-compaction splitting logical turns into several segments, the extension waits for idle to *settle* rather than trusting a single `agent_end` event.
-3. A `schedule_loop_wakeup` tool is registered for the agent to invoke (with an optional `delaySeconds`) to request another iteration; not calling it ends the loop.
-4. The `input` event handler detects `source === "interactive"` to yield control when the user types, while ignoring the loop's own re-fires (`source: "extension"`).
-5. A 1-second `setInterval` ticker drives the footer countdown via `ctx.ui.setStatus()`.
+| File | Responsibility |
+|---|---|
+| `src/types.ts` | Loop/trigger types. |
+| `src/loop-parse.ts` | `parseInterval`, `extractInterval`, cron math, jitter (pure, tested). |
+| `src/store.ts` | Loop registry + JSON persistence. |
+| `src/scheduler.ts` | Self-re-arming cron timers. |
+| `src/triggers.ts` | Event/hybrid subscriptions + debounce. |
+| `loop.ts` | Entry: command, tools, fire→message bridge, status widget, lifecycle. |
 
 ## License
 
