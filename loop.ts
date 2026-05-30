@@ -34,7 +34,7 @@ const TICK_MS = 1_000;
 
 const SELF_PACED_HINT =
 	"\n\n" +
-	"[When finished, call schedule_loop_wakeup(delaySeconds: N) to re-fire this prompt. " +
+	"[Loop: call schedule_loop_wakeup(delaySeconds: N) to re-fire. " +
 	"Omit delaySeconds for immediate re-fire. " +
 	"Stop by omitting the tool call entirely.]";
 
