@@ -55,6 +55,8 @@ function formatRemaining(ms: number): string {
 // ── State ──────────────────────────────────────────────────────────────────
 
 class Loop {
+	api!: ExtensionAPI;
+
 	mode: "self-paced" | null = null;
 	payload = "";
 	iterations = 0;
@@ -87,7 +89,7 @@ class Loop {
 	// ── Status bar ────────────────────────────────────────────────────────
 
 	private renderStatus(): void {
-		void pi.withCommandContext((ctx) => {
+		void this.api.withCommandContext((ctx) => {
 			if (!this.active) {
 				ctx.ui.setStatus(STATUS_KEY, undefined);
 				return;
@@ -121,7 +123,7 @@ class Loop {
 		this.stopTicker();
 		this.nextFireAt = null;
 		this.running = false;
-		void pi.withCommandContext((ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+		void this.api.withCommandContext((ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
 	}
 
 	// ── Stop ──────────────────────────────────────────────────────────────
@@ -135,7 +137,7 @@ class Loop {
 		this.iterations = 0;
 		this.consecutiveNoTurns = 0;
 		this.rescheduled = false;
-		if (announce) void pi.withCommandContext((ctx) => ctx.ui.notify(`Loop stopped (${reason}).`));
+		if (announce) void this.api.withCommandContext((ctx) => ctx.ui.notify(`Loop stopped (${reason}).`));
 	}
 
 	// ── Turn waiting ──────────────────────────────────────────────────────
@@ -187,7 +189,7 @@ class Loop {
 		if (!this.active) return;
 
 		try {
-			await pi.withCommandContext(async (ctx) => {
+			await this.api.withCommandContext(async (ctx) => {
 				if (!this.active) return;
 
 				if (!ctx.isIdle()) {
@@ -200,7 +202,7 @@ class Loop {
 				this.rescheduled = false;
 				this.renderStatus();
 
-				pi.sendUserMessage(this.payload + SELF_PACED_HINT, {
+				this.api.sendUserMessage(this.payload + SELF_PACED_HINT, {
 					executeSlashCommands: true,
 				});
 
@@ -240,7 +242,7 @@ class Loop {
 		if (this.wakeupRegistered) return;
 		this.wakeupRegistered = true;
 
-		pi.registerTool({
+		this.api.registerTool({
 			name: "schedule_loop_wakeup",
 			label: "Schedule Loop Wakeup",
 			description:
@@ -282,9 +284,10 @@ class Loop {
 
 // ── Extension ──────────────────────────────────────────────────────────────
 
-const loop = new Loop();
-
 export default function loopExtension(pi: ExtensionAPI) {
+	const loop = new Loop();
+	loop.api = pi;
+
 	const notify = (msg: string, type: "info" | "warning" | "error" = "info") =>
 		void pi.withCommandContext((ctx) => ctx.ui.notify(msg, type));
 
