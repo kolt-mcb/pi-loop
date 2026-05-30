@@ -34,8 +34,8 @@ const TICK_MS = 1_000;
 
 const SELF_PACED_HINT =
 	"\n\n" +
-	"[Continue in the loop by calling schedule_loop_wakeup(delaySeconds: N) at the END of your turn. " +
-	"N is the interval in seconds; omit for immediate re-fire. " +
+	"[When finished, call schedule_loop_wakeup(delaySeconds: N) to re-fire this prompt. " +
+	"Omit delaySeconds for immediate re-fire. " +
 	"Stop by omitting the tool call entirely.]";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
