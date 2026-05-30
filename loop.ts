@@ -3,7 +3,7 @@
  *
  * Runs a prompt repeatedly, modelled on Claude Code's /loop.
  * The model interprets any interval from natural language and
- * calls schedule_loop_wakeup(delaySeconds: N) to control cadence.
+ * calls schedule_loop_wakeup to control cadence.
  *
  * Usage:
  *   /loop every 5 minutes check tests    — model parses interval, reschedules with delay
@@ -33,10 +33,7 @@ const STATUS_KEY = "loop";
 const TICK_MS = 1_000;
 
 const SELF_PACED_HINT =
-	"\n\n" +
-	"[Loop: call schedule_loop_wakeup(delaySeconds: N) to re-fire. " +
-	"Omit delaySeconds for immediate re-fire. " +
-	"Stop by omitting the tool call entirely.]";
+	"\n\n[Self-paced loop: call the schedule_loop_wakeup tool at the END of your turn to run this again, or omit it to end the loop.]";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -91,26 +88,26 @@ class Loop {
 	private renderStatus(): void {
 		try {
 			void this.api.withCommandContext((ctx) => {
-			if (!this.active) {
-				ctx.ui.setStatus(STATUS_KEY, undefined);
-				return;
-			}
-			if (!ctx.hasUI) {
-				this.stopTicker();
-				return;
-			}
-			const theme = ctx.ui.theme;
-			const body =
-				this.running
-					? `running · iter ${this.iterations + 1}`
-					: this.nextFireAt !== null
-						? `next in ${formatRemaining(this.nextFireAt - Date.now())} · ${this.iterations} done`
-						: `active · ${this.iterations} done`;
-			ctx.ui.setStatus(
-				STATUS_KEY,
-				`${theme.fg("accent", "⟳")} ${theme.fg("dim", `loop · ${body}`)}`,
-			);
-		});
+				if (!this.active) {
+					ctx.ui.setStatus(STATUS_KEY, undefined);
+					return;
+				}
+				if (!ctx.hasUI) {
+					this.stopTicker();
+					return;
+				}
+				const theme = ctx.ui.theme;
+				const body =
+					this.running
+						? `running · iter ${this.iterations + 1}`
+						: this.nextFireAt !== null
+							? `next in ${formatRemaining(this.nextFireAt - Date.now())} · ${this.iterations} done`
+							: `active · ${this.iterations} done`;
+				ctx.ui.setStatus(
+					STATUS_KEY,
+					`${theme.fg("accent", "⟳")} ${theme.fg("dim", `loop · ${body}`)}`,
+				);
+			});
 		} catch {
 			// Session may have changed; ticker will clean up
 			this.stopTicker();
@@ -259,33 +256,31 @@ class Loop {
 			name: "schedule_loop_wakeup",
 			label: "Schedule Loop Wakeup",
 			description:
-				"Continue the active loop. Call once at the end of your turn to be re-invoked. " +
-				"Pass delaySeconds (N) to set the interval between iterations in seconds. " +
-				"Omit delaySeconds for immediate re-fire. Omit the call entirely to stop.",
-			promptSnippet: "Continue a loop, optionally specifying delaySeconds.",
+				"Continue the active self-paced /loop. Call this once, at the end of your turn, " +
+				"to be re-invoked with the same loop prompt. If you do not call it, the loop ends.",
+			promptSnippet: "Continue a self-paced /loop by requesting another iteration.",
 			promptGuidelines: [
-				"Only relevant while a /loop is active.",
-				"Call schedule_loop_wakeup(delaySeconds: N) to keep looping with a cadence, " +
-				"or call without delaySeconds for immediate re-fire.",
-				"Omit the call to end the loop.",
+				"Only relevant while a self-paced /loop is active.",
+				"Call schedule_loop_wakeup once at the end of a turn to keep looping; omit it to stop.",
 			],
 			parameters: Type.Object({
+				reason: Type.Optional(
+					Type.String({ description: "Why to continue (for your own tracking)." }),
+				),
 				delaySeconds: Type.Optional(
-					Type.Number({ description: "Seconds between iterations. Omit for immediate re-fire." }),
+					Type.Number({ description: "Optional delay in seconds before the next iteration." }),
 				),
 			}),
 			async execute(_toolCallId, params) {
 				if (this.mode !== "self-paced") {
 					return {
-						content: [{ type: "text", text: "No active loop." }],
+						content: [{ type: "text", text: "No active self-paced loop; ignoring." }],
 						details: null,
 					};
 				}
 				this.rescheduled = true;
-				this.rescheduleDelayMs = Math.round((params.delaySeconds ?? 0) * 1_000);
-				const when = this.rescheduleDelayMs
-					? ` in ${this.rescheduleDelayMs / 1_000}s`
-					: " immediately";
+				this.rescheduleDelayMs = Math.max(0, Math.round((params.delaySeconds ?? 0) * 1_000));
+				const when = this.rescheduleDelayMs ? ` in ${this.rescheduleDelayMs / 1_000}s` : "";
 				return {
 					content: [{ type: "text", text: `Loop will continue${when}.` }],
 					details: null,
