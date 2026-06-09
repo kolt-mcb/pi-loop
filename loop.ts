@@ -17,8 +17,10 @@
  * Notes:
  *   - Loops persist to .pi/loops and are restored, if unexpired, on --resume.
  *     Set PI_LOOP=off for in-memory only, or PI_LOOP=<path> for a custom store.
- *   - Fires are delivered between turns (deliverAs "followUp"); a recurring fire
- *     is skipped while messages are already queued, so ticks never stack.
+ *   - A cron tick that lands while the agent is busy marks the loop "due" instead
+ *     of queueing a stale prompt; the fire is delivered fresh as soon as the agent
+ *     goes idle. Ticks landing while already due collapse into one fire, and
+ *     fireCount only counts fires that were actually delivered.
  *   - Typing while a self-paced loop waits ends it (you took over). Fixed/event
  *     loops keep running across your messages until you /loop stop them.
  */
@@ -112,22 +114,22 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 	let latestCtx: ExtensionContext | undefined;
 	let latestUI: ExtensionUIContext | undefined;
-	let started = false;
+	let boundSessionId: string | undefined;
 	let lastSelfPacedId: string | undefined;
 	const selfPacedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	// Cron loops whose tick landed mid-turn; they fire when the agent goes idle.
+	const dueLoops = new Set<string>();
 	let ticker: ReturnType<typeof setInterval> | undefined;
 
 	const notify = (msg: string, type: "info" | "warning" | "error" = "info") => latestUI?.notify(msg, type);
 
 	// ── Firing ────────────────────────────────────────────────────────────
 
-	function onLoopFire(entry: LoopEntry): void {
-		if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
-			store.setStatus(entry.id, "expired");
-			return;
-		}
-		store.update(entry.id, { fireCount: (entry.fireCount ?? 0) + 1 });
-		if (entry.trigger.type === "self-paced") lastSelfPacedId = entry.id;
+	// Deliver a fire: this is the only place fireCount moves, so the count always
+	// equals fires the agent actually received.
+	function deliverFire(entry: LoopEntry): void {
+		dueLoops.delete(entry.id);
+		const updated = store.update(entry.id, { fireCount: (entry.fireCount ?? 0) + 1 }) ?? entry;
 
 		const payload: LoopFireEvent = {
 			loopId: entry.id,
@@ -138,24 +140,65 @@ export default function loopExtension(pi: ExtensionAPI) {
 			recurring: entry.recurring,
 		};
 		pi.events.emit("loop:fire", payload);
+
+		if (updated.maxFires && (updated.fireCount ?? 0) >= updated.maxFires) {
+			store.setStatus(entry.id, "expired");
+			triggers.remove(entry.id);
+		}
+		renderStatus();
+	}
+
+	function onLoopFire(entry: LoopEntry): void {
+		if (entry.maxFires && (entry.fireCount ?? 0) >= entry.maxFires) {
+			store.setStatus(entry.id, "expired");
+			return;
+		}
+		if (entry.trigger.type === "self-paced") {
+			lastSelfPacedId = entry.id;
+			deliverFire(entry);
+			return;
+		}
+		if (entry.trigger.type === "cron") {
+			// A tick that lands mid-turn doesn't queue a stale prompt — it marks the
+			// loop due, and the fire is delivered fresh once the agent goes idle.
+			// Further ticks while due collapse into that one pending fire.
+			const busy = latestCtx ? !latestCtx.isIdle() || latestCtx.hasPendingMessages() : false;
+			if (busy) {
+				dueLoops.add(entry.id);
+				renderStatus();
+				return;
+			}
+			deliverFire(entry);
+			return;
+		}
+		// event / hybrid: deliver as a follow-up to the turn that caused the event,
+		// but never stack fires while one is already queued.
+		if (entry.recurring && latestCtx?.hasPendingMessages()) return;
+		deliverFire(entry);
 	}
 
 	const scheduler = new CronScheduler(store, onLoopFire);
 	const triggers = new TriggerSystem(pi, scheduler, store, onLoopFire);
 
-	// Turn a due loop into an actual user message. Delivered as a follow-up so pi
-	// queues it until the current turn ends; recurring fires are dropped while a
-	// message is already pending so ticks don't pile up.
+	// Turn a delivered fire into an actual user message (followUp: starts a turn
+	// when idle, otherwise lands right after the current turn).
 	pi.events.on("loop:fire", (raw: unknown) => {
 		const data = raw as LoopFireEvent;
-		if (data.recurring && latestCtx?.hasPendingMessages()) return;
-
 		const constraint = data.readOnly ? READONLY_NOTE : "";
 		const hint = data.trigger.type === "self-paced" ? SELF_PACED_HINT : "";
 		const message = `[pi-loop] Loop #${data.loopId} fired (${describeTrigger(data.trigger)}).${constraint}\n\n${data.prompt}${hint}`;
 		pi.sendUserMessage(message, { deliverAs: "followUp" });
 		renderStatus();
 	});
+
+	// Fire any loops that came due while the agent was busy.
+	function deliverDue(): void {
+		for (const id of [...dueLoops]) {
+			dueLoops.delete(id);
+			const entry = store.get(id);
+			if (entry && entry.status === "active") deliverFire(entry);
+		}
+	}
 
 	function fireSelfPacedNow(entry: LoopEntry): void {
 		onLoopFire(entry);
@@ -174,16 +217,19 @@ export default function loopExtension(pi: ExtensionAPI) {
 			return;
 		}
 		latestUI.setStatus(STATUS_KEY, `⟳ loop · ${active.length} active`);
+		startTicker();
 		const lines = active.map((l) => {
 			const next = scheduler.nextFire(l.id);
 			const when =
 				l.trigger.type === "self-paced"
 					? "waiting for model"
-					: next
-						? `next ${formatRemaining(next - Date.now())}`
-						: l.trigger.type === "event"
-							? "on event"
-							: "pending";
+					: dueLoops.has(l.id)
+						? "due — fires when agent is idle"
+						: next
+							? `next ${formatRemaining(next - Date.now())}`
+							: l.trigger.type === "event"
+								? "on event"
+								: "pending";
 			const fires = l.maxFires ? ` ${l.fireCount ?? 0}/${l.maxFires}` : l.fireCount ? ` ${l.fireCount}×` : "";
 			return `⟳ #${l.id} ${l.prompt.slice(0, 48)} — ${describeTrigger(l.trigger)} · ${when}${fires}`;
 		});
@@ -208,6 +254,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 		const t = selfPacedTimers.get(id);
 		if (t) clearTimeout(t);
 		selfPacedTimers.delete(id);
+		dueLoops.delete(id);
 		const existed = store.delete(id);
 		if (existed) {
 			renderStatus();
@@ -401,9 +448,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 			return matches.length ? matches : null;
 		},
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			latestCtx = ctx;
-			latestUI = ctx.ui;
-			ensureStarted(ctx);
+			bindSession(ctx);
 
 			const trimmed = args.trim();
 			const first = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
@@ -479,30 +524,47 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
-	function ensureStarted(ctx: ExtensionContext): void {
-		if (started) return;
-		started = true;
+	// Bind the store, jitter seed, and timers to the current session. Runs at
+	// session start (so restored loops arm and fire without waiting for the user
+	// to type) and re-runs whenever the session id changes (/new, fork, resume),
+	// so a new session never keeps firing the previous session's loops.
+	function bindSession(ctx: ExtensionContext): void {
+		latestCtx = ctx;
+		latestUI = ctx.ui;
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (sessionId === boundSessionId) return;
+		boundSessionId = sessionId;
+
+		triggers.stop();
+		for (const t of selfPacedTimers.values()) clearTimeout(t);
+		selfPacedTimers.clear();
+		dueLoops.clear();
+
 		if (piLoopEnv !== "off") {
 			try {
-				store.setPath(resolveStorePath(ctx.sessionManager.getSessionId()));
+				store.setPath(resolveStorePath(sessionId));
 			} catch {
 				// keep in-memory store
 			}
 		}
 		store.clearExpired();
+		scheduler.setSeed(sessionId);
 		triggers.start();
 		renderStatus();
 	}
 
 	function captureCtx(ctx: ExtensionContext): void {
-		latestCtx = ctx;
-		latestUI = ctx.ui;
-		ensureStarted(ctx);
+		bindSession(ctx);
 		renderStatus();
 	}
 
+	pi.on("session_start", async (_event, ctx) => bindSession(ctx));
 	pi.on("before_agent_start", async (_event, ctx) => captureCtx(ctx));
 	pi.on("turn_start", async (_event, ctx) => captureCtx(ctx));
+	pi.on("agent_end", async (_event, ctx) => {
+		captureCtx(ctx);
+		deliverDue();
+	});
 
 	// Typing while a self-paced loop is waiting ends it — you took over. Fixed and
 	// event loops keep running (they fire between your turns by design).
@@ -526,6 +588,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		triggers.stop();
 		for (const t of selfPacedTimers.values()) clearTimeout(t);
 		selfPacedTimers.clear();
+		dueLoops.clear();
 		stopTicker();
 	});
 }

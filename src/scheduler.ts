@@ -16,11 +16,18 @@ function cronOf(entry: LoopEntry): string | undefined {
 export class CronScheduler {
 	private timers = new Map<string, ReturnType<typeof setTimeout>>();
 	private fireTimes = new Map<string, number>();
+	private seed = "";
 
 	constructor(
 		private store: LoopStore,
 		private onFire: (entry: LoopEntry) => void,
 	) {}
+
+	/** Per-session jitter seed — loop ids repeat across sessions ("1", "2", …),
+	 * so without this, concurrent sessions in the same cwd fire at the same instant. */
+	setSeed(seed: string): void {
+		this.seed = seed;
+	}
 
 	/** Arm timers for every active cron/hybrid loop currently in the store. */
 	start(): void {
@@ -58,7 +65,7 @@ export class CronScheduler {
 		const next = cronToNextFire(schedule, new Date());
 		const minuteField = schedule.trim().split(/\s+/)[0];
 		const stepMinutes = minuteField.startsWith("*/") ? parseInt(minuteField.slice(2), 10) || 30 : 30;
-		const fireTime = next.getTime() + computeJitter(entry.id, entry.recurring, stepMinutes);
+		const fireTime = next.getTime() + computeJitter(`${this.seed}:${entry.id}`, entry.recurring, stepMinutes);
 
 		if (fireTime > entry.expiresAt) {
 			this.store.setStatus(entry.id, "expired");

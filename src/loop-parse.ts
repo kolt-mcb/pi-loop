@@ -198,7 +198,9 @@ export function cronFieldMatches(field: string, value: number): boolean {
 
 /**
  * Deterministic per-loop offset so multiple sessions don't hit the API at the
- * same wall-clock instant. Derived from the loop id, so a loop's offset is stable.
+ * same wall-clock instant. Derived from the loop id (callers prefix a session
+ * seed), so a loop's offset is stable. Capped at a minute so a fire is never
+ * noticeably late relative to its schedule.
  */
 export function computeJitter(loopId: string, recurring: boolean, scheduleMinutes: number): number {
 	let hash = 0;
@@ -207,11 +209,6 @@ export function computeJitter(loopId: string, recurring: boolean, scheduleMinute
 		hash |= 0;
 	}
 	const normalized = Math.abs(hash % 10000) / 10000;
-	if (recurring && scheduleMinutes <= 30) {
-		return Math.floor(normalized * (scheduleMinutes / 2) * 60 * 1000);
-	}
-	if (recurring) {
-		return Math.floor(normalized * 30 * 60 * 1000);
-	}
-	return Math.floor(normalized * 90 * 1000);
+	const spreadMs = recurring ? Math.min((scheduleMinutes / 2) * 60 * 1000, 60 * 1000) : 90 * 1000;
+	return Math.floor(normalized * spreadMs);
 }

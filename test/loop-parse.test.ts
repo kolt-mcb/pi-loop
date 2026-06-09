@@ -83,5 +83,17 @@ test("computeJitter: deterministic and bounded", () => {
 	const a = computeJitter("42", true, 15);
 	const b = computeJitter("42", true, 15);
 	assert.equal(a, b); // stable for the same id
-	assert.ok(a >= 0 && a <= (15 / 2) * 60 * 1000);
+	assert.ok(a >= 0 && a <= 60 * 1000);
+});
+
+test("computeJitter: recurring jitter never exceeds a minute", () => {
+	for (const id of ["1", "session-a:1", "session-b:1", "xyz:25"]) {
+		assert.ok(computeJitter(id, true, 60) <= 60 * 1000);
+		assert.ok(computeJitter(id, true, 1) <= 30 * 1000);
+	}
+});
+
+test("computeJitter: different seeds give different offsets for the same loop id", () => {
+	const offsets = new Set(["a:1", "b:1", "c:1", "d:1"].map((id) => computeJitter(id, true, 10)));
+	assert.ok(offsets.size > 1);
 });

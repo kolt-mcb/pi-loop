@@ -82,9 +82,11 @@ Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event-bus cha
 
 ## Behaviour notes
 
-- **Fires land between turns.** Each fire is delivered as a follow-up message, so it waits for the current turn to finish. A recurring fire is skipped while a message is already queued, so ticks never stack.
+- **Cron fires wait for idle.** A tick that lands while the agent is mid-turn marks the loop **due** (shown in the status widget) instead of queueing a stale prompt; the fire is delivered fresh the moment the agent goes idle. Ticks landing while already due collapse into that one fire — so when turns run longer than the interval, the effective cadence is one fire per turn, and `fireCount` only counts fires the agent actually received.
+- **Event fires land between turns.** An event/hybrid fire is delivered as a follow-up to the turn that caused it; a recurring fire is skipped while a message is already queued, so ticks never stack.
 - **Takeover.** Typing while a **self-paced** loop is waiting ends it (you took over). Fixed and event loops keep running across your messages until you `/loop stop` them.
 - **No catch-up.** If fires were missed while busy, the loop fires once when idle, not once per missed interval.
+- **Session binding.** Loops arm at session start (a `--resume`d loop fires without you having to type first), and re-bind when the session changes (`/new`, fork), so a new session never inherits the old session's timers. Note each session has its own store — a loop started in one terminal isn't visible to `/loop stop` in another.
 
 ## Configuration
 
