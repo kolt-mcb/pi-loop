@@ -115,7 +115,7 @@ test("self-paced /loop fires immediately on creation", async () => {
 	const { sent, command, ctx } = setup();
 	await command.handler("fix decomp diffs", ctx);
 	assert.equal(sent.length, 1);
-	assert.match(sent[0].msg, /\[pi-loop\] Loop #1 fired \(self-paced\)/);
+	assert.match(sent[0].msg, /\[pi-loop\] Iteration #1 \(self-paced\)/);
 	assert.match(sent[0].msg, /fix decomp diffs/);
 });
 
@@ -135,7 +135,10 @@ test("auto-continues after each turn with NO schedule_loop_wakeup call", async (
 	await dispatch("agent_end");
 	await tick();
 	assert.equal(sent.length, 4, "keeps auto-continuing");
-	assert.match(sent[3].msg, /Loop #1 fired/);
+	// Each fire's header carries the climbing iteration number, so consecutive
+	// fires read #1, #2, #3, #4 — not the same "Loop #1" repeated.
+	assert.match(sent[0].msg, /Iteration #1 \(self-paced\)/);
+	assert.match(sent[3].msg, /Iteration #4 \(self-paced\)/);
 
 	// fireCount reflects delivered fires (the user's question).
 	const list = await callTool("LoopList", {});

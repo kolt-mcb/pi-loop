@@ -151,6 +151,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 		const payload: LoopFireEvent = {
 			loopId: entry.id,
+			iteration: updated.fireCount ?? 1,
 			prompt: entry.prompt,
 			trigger: entry.trigger,
 			timestamp: Date.now(),
@@ -203,8 +204,15 @@ export default function loopExtension(pi: ExtensionAPI) {
 	pi.events.on("loop:fire", (raw: unknown) => {
 		const data = raw as LoopFireEvent;
 		const constraint = data.readOnly ? READONLY_NOTE : "";
-		const hint = data.trigger.type === "self-paced" ? SELF_PACED_HINT : "";
-		const message = `[pi-loop] Loop #${data.loopId} fired (${describeTrigger(data.trigger)}).${constraint}\n\n${data.prompt}${hint}`;
+		const selfPaced = data.trigger.type === "self-paced";
+		const hint = selfPaced ? SELF_PACED_HINT : "";
+		// Self-paced loops lead with the climbing iteration count (matches the
+		// status widget), so consecutive fires read as #1, #2, #3 — not the same
+		// "Loop #1" repeated. Other triggers keep the stable loop id.
+		const header = selfPaced
+			? `[pi-loop] Iteration #${data.iteration ?? 1} (self-paced).`
+			: `[pi-loop] Loop #${data.loopId} fired (${describeTrigger(data.trigger)}).`;
+		const message = `${header}${constraint}\n\n${data.prompt}${hint}`;
 		pi.sendUserMessage(message, { deliverAs: "followUp" });
 		renderStatus();
 	});

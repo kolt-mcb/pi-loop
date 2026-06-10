@@ -6,7 +6,7 @@ A [pi](https://github.com/earendil-works/pi) extension that runs a prompt **repe
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
 [![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
-[![Version](https://img.shields.io/badge/version-%40v0.3.3-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.3)
+[![Version](https://img.shields.io/badge/version-%40v0.3.4-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.4)
 
 Schedule a prompt to run repeatedly inside pi. Whether driven by a timer or by the agent itself, **the model is never responsible for keeping a loop alive** — the harness re-fires it, and it stops only on an explicit signal.
 
@@ -36,7 +36,7 @@ This mirrors how Codex / Claude Code agent loops behave: **continuation is the d
 ```bash
 pi install npm:@koltmcbride/pi-loop
 # or
-pi install git:github.com/kolt-mcb/pi-loop@v0.3.3
+pi install git:github.com/kolt-mcb/pi-loop@v0.3.4
 ```
 
 Verify it's loaded with `pi list`.

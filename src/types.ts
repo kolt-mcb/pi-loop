@@ -60,6 +60,8 @@ export interface LoopStoreData {
 /** Payload emitted on the "loop:fire" channel when a loop is due. */
 export interface LoopFireEvent {
 	loopId: string;
+	/** 1-based count of fires delivered for this loop (the iteration number). */
+	iteration?: number;
 	prompt: string;
 	trigger: Trigger;
 	timestamp: number;
