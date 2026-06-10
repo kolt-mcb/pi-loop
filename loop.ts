@@ -58,11 +58,13 @@ const BRIDGED_EVENTS = [
 ] as const;
 
 // Auto-continuing loops keep going on their own (the harness re-fires after each
-// turn) — the model is NOT responsible for keeping them alive, mirroring how
-// Codex/Claude Code agent loops continue by default and stop only on an explicit
-// signal. The hint tells the model how to STOP, not how to continue.
+// turn) and run until the USER stops them — the model neither keeps them alive
+// nor decides to end them. The hint deliberately does NOT invite the model to
+// stop: telling it to "LoopDelete when the goal is achieved" made it rationalize
+// quitting open-ended tasks ("this is infinite, so I'll stop"). Continuation is
+// unconditional; only the user ends it (/loop stop, or typing = takeover).
 const SELF_PACED_HINT =
-	"\n\n[Auto-looping task: this repeats automatically after each turn. When the goal is fully achieved and nothing remains, call LoopDelete with this loop's id to stop it. To wait longer before the next iteration, call schedule_loop_wakeup with delaySeconds.]";
+	"\n\n[Auto-looping task: this repeats automatically after each turn and keeps running until the user stops it. Just do this iteration's work and end your turn — you don't need to call anything to continue, and you should NOT stop the loop yourself even if the task looks open-ended or complete. To space out iterations, call schedule_loop_wakeup with delaySeconds.]";
 
 // Gap before a self-paced loop auto-continues after a turn ends. Small by design:
 // the previous turn already did the work, so the next iteration starts promptly.
@@ -456,6 +458,16 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		execute: (_id, params) => {
 			const entry = store.get(params.id);
 			if (!entry) return Promise.resolve(textResult(`Loop #${params.id} not found.`));
+			// A user-started /loop is the user's to end, not the model's — refuse so an
+			// open-ended task can't be quit by the agent deciding it's "done". The user
+			// always has instant control (/loop stop, or typing = takeover).
+			if (entry.source === "command") {
+				return Promise.resolve(
+					textResult(
+						`Loop #${params.id} was started by the user with /loop and runs until they stop it (/loop stop ${params.id}). Leaving it running — keep working on the task.`,
+					),
+				);
+			}
 			if (params.action === "pause") {
 				triggers.remove(params.id);
 				store.setStatus(params.id, "paused");
@@ -471,12 +483,12 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		name: "schedule_loop_wakeup",
 		label: "Schedule Loop Wakeup",
 		description:
-			"Optional cadence control for the active self-paced /loop. The loop ALREADY continues on its own after every turn — you do not need to call this to keep it alive. Call it only to set a custom gap before the next iteration (delaySeconds), e.g. to wait while something external finishes. To STOP the loop when the goal is achieved, call LoopDelete instead.",
+			"Optional cadence control for the active self-paced /loop. The loop ALREADY continues on its own after every turn — you do not need to call this to keep it alive. Call it only to set a custom gap before the next iteration (delaySeconds), e.g. to wait while something external finishes. A user-started /loop runs until the user stops it; do not try to end it yourself.",
 		promptSnippet: "Set a custom delay before a self-paced /loop's next auto-iteration.",
 		promptGuidelines: [
 			"A self-paced /loop continues automatically — do NOT call schedule_loop_wakeup just to keep it going.",
 			"Use it only to lengthen the gap before the next iteration (delaySeconds), e.g. 900 to wait 15 minutes.",
-			"When the loop's goal is fully achieved, stop it with LoopDelete (not by staying silent).",
+			"A user-started /loop is ended by the user, not by you — never call LoopDelete on it even if the task looks open-ended or finished.",
 		],
 		parameters: Type.Object({
 			reason: Type.Optional(Type.String({ description: "Why this cadence (for your own tracking)." })),
