@@ -6,26 +6,30 @@ A [pi](https://github.com/earendil-works/pi) extension that runs a prompt **repe
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
 [![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
-[![Version](https://img.shields.io/badge/version-%40v0.2.0-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.2.0)
+[![Version](https://img.shields.io/badge/version-%40v0.3.0-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.0)
 
-Schedule a prompt to run repeatedly inside pi. An interval is parsed at the command layer into a cron schedule and run by a **self-re-arming timer**, so the loop keeps going on its own — the model is never responsible for keeping it alive. A self-paced mode is kept for "let the model decide when there's nothing left to do."
+Schedule a prompt to run repeatedly inside pi. Whether driven by a timer or by the agent itself, **the model is never responsible for keeping a loop alive** — the harness re-fires it, and it stops only on an explicit signal.
 
-## What changed in 0.2.0
+## What changed in 0.3.0
 
-Earlier versions had a single **self-paced** mode: the model had to call a wakeup tool at the end of every turn or the loop ended. That meant a turn ending on a summary silently killed the loop, and an interval like `15m` written in the prompt was never actually a cadence — just text.
+Self-paced `/loop <prompt>` is now **auto-continuing**: after every turn the harness re-fires it on its own, and it ends only when the model calls `LoopDelete` ("goal reached"), you `/loop stop` it, you type (takeover), or it hits `maxFires`/expiry. Previously the model had to call a wakeup tool at the *end of every turn* or the loop silently died — a protocol weaker models (and a turn that ends on a summary) routinely dropped.
 
-0.2.0 makes a parsed interval **authoritative and timer-driven**, adds **event** and **hybrid** triggers, **multiple concurrent loops**, and **persistence** that restores unexpired loops on resume. Self-paced remains as a second mode.
+This mirrors how Codex and Claude Code agent loops behave: **continuation is the default; stopping is the explicit act.** `schedule_loop_wakeup` is kept but demoted to an optional cadence control — call it only to lengthen the gap before the next iteration; you no longer need it to stay alive.
+
+### 0.2.x foundations
+
+0.2.0 made a parsed interval **authoritative and timer-driven** (`/loop 15m …` → cron on a self-re-arming timer), and added **event**/**hybrid** triggers, **multiple concurrent loops**, and **persistence** that restores unexpired loops on resume.
 
 ## Features
 
 - **Fixed-interval loops** — `/loop 15m <prompt>` parses the interval into cron and runs it on a self-re-arming timer. Continuation is the default.
-- **Self-paced loops** — `/loop <prompt>` (no interval) fires once, then continues only if the model calls `schedule_loop_wakeup`. It may end the loop by not calling it. When it schedules a wakeup with a delay, the status widget shows a live `wakeup in …` countdown so you can see when it'll fire next; until then it reads `waiting for model`.
+- **Auto-continuing loops** — `/loop <prompt>` (no interval) fires, then the harness re-fires it after each turn on its own (default 5s gap, set `PI_LOOP_CONTINUE_MS`). It ends only on an explicit signal: the model calling `LoopDelete`, `/loop stop`, you typing, or `maxFires`/expiry. The status widget shows a live `next in …` countdown to each auto-iteration.
 - **Event & hybrid triggers** — fire on a pi event (e.g. `tool_execution_end`, `turn_end`, `monitor:done`) instead of polling, or combine cron + event with debounce.
 - **Multiple loops** — run several at once; manage with `LoopCreate` / `LoopList` / `LoopDelete` or `/loop list`.
 - **Persistence** — loops are stored under `.pi/loops` and restored, if unexpired, on `--resume`/`--continue`.
 - **Safety caps** — per-loop `maxFires` and an automatic 7-day expiry; jittered fire times avoid API stampedes.
 - **Read-only mode** — restrict a loop's fires to read/inspection tools.
-- **Live status** — a footer indicator and widget list active loops with next-fire countdowns, including the `wakeup in …` time for a self-paced loop that has scheduled its next iteration.
+- **Live status** — a footer indicator and widget list active loops with next-fire countdowns, including the `next in …` time before an auto-continuing loop's next iteration.
 
 ## Installation
 
@@ -47,7 +51,7 @@ Fixed 5-minute loop. Runs until you stop it, 7 days pass, or it hits a fire cap.
 ```
 /loop check whether CI passed and address review comments
 ```
-Self-paced: the model works, then decides whether to continue via `schedule_loop_wakeup` (and at what delay).
+Auto-continuing: the model works, the harness re-fires after each turn, and the model stops it with `LoopDelete` once the goal is met.
 
 ```
 /loop stop          # stop all active loops
@@ -63,7 +67,7 @@ Self-paced: the model works, then decides whether to continue via `schedule_loop
 |---|---|
 | `/loop 15m <prompt>` | Fixed-interval (cron) loop. Interval may also trail: `<prompt> every 2 hours`. |
 | `/loop 0 9 * * 1-5 <prompt>` | Full 5-field cron schedule. |
-| `/loop <prompt>` | Self-paced loop (model-driven cadence). |
+| `/loop <prompt>` | Auto-continuing loop — re-fires after each turn until the model `LoopDelete`s it or you stop it. |
 | `/loop list` | List/manage active loops. |
 | `/loop stop [id]` | Stop all loops, or one by id. |
 
@@ -76,7 +80,7 @@ Intervals use `s` / `m` / `h` / `d`. Sub-minute rounds up to one minute (cron's 
 | `LoopCreate` | Schedule a loop on a cron timer, a pi event, or a hybrid of both. Supports `recurring`, `readOnly`, `maxFires`, `filter`. |
 | `LoopList` | List loops with ids, triggers, fire counts, next-fire times. |
 | `LoopDelete` | Delete a loop, or `action="pause"` to keep it without firing. |
-| `schedule_loop_wakeup` | Continue the active **self-paced** loop; optional `delaySeconds`. Omit to end it. |
+| `schedule_loop_wakeup` | Optional cadence control for an auto-continuing loop — set a custom `delaySeconds` before the next iteration. Not needed to keep it alive; use `LoopDelete` to stop. |
 
 Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event-bus channel; lifecycle events `tool_execution_start/end`, `turn_start/end`, `agent_start/end`, `message_end` are bridged through), or `hybrid` (both, debounced).
 
@@ -84,7 +88,8 @@ Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event-bus cha
 
 - **Cron fires wait for idle.** A tick that lands while the agent is mid-turn marks the loop **due** (shown in the status widget) instead of queueing a stale prompt; the fire is delivered fresh the moment the agent goes idle. Ticks landing while already due collapse into that one fire — so when turns run longer than the interval, the effective cadence is one fire per turn, and `fireCount` only counts fires the agent actually received.
 - **Event fires land between turns.** An event/hybrid fire is delivered as a follow-up to the turn that caused it; a recurring fire is skipped while a message is already queued, so ticks never stack.
-- **Takeover.** Typing while a **self-paced** loop is waiting ends it (you took over). Fixed and event loops keep running across your messages until you `/loop stop` them.
+- **Takeover.** Typing while an **auto-continuing** loop is running ends it (you took over). Fixed and event loops keep running across your messages until you `/loop stop` them.
+- **Stopping an auto-continuing loop.** It does not stop itself by going quiet — the model must call `LoopDelete` (told to in the fire prompt) when the goal is reached, or you `/loop stop` it. This is deliberate: continuation is the default, ending is explicit.
 - **No catch-up.** If fires were missed while busy, the loop fires once when idle, not once per missed interval.
 - **Session binding.** Loops arm at session start (a `--resume`d loop fires without you having to type first), and re-bind when the session changes (`/new`, fork), so a new session never inherits the old session's timers. Note each session has its own store — a loop started in one terminal isn't visible to `/loop stop` in another.
 
@@ -93,6 +98,7 @@ Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event-bus cha
 | Variable | Effect | Default |
 |---|---|---|
 | `PI_LOOP` | `off` disables persistence (in-memory only); an absolute or relative path sets a custom store file | `.pi/loops/loops-<sessionId>.json` |
+| `PI_LOOP_CONTINUE_MS` | Gap before an auto-continuing `/loop <prompt>` re-fires after a turn ends | `5000` |
 
 Constants at the top of `loop.ts` / `src/`: status tick interval, default hybrid debounce, and the bridged lifecycle event list. Caps: 25 active loops, 7-day expiry.
 
