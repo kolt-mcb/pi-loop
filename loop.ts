@@ -117,6 +117,9 @@ export default function loopExtension(pi: ExtensionAPI) {
 	let boundSessionId: string | undefined;
 	let lastSelfPacedId: string | undefined;
 	const selfPacedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	// Wall-clock ms a self-paced loop's scheduled wakeup will fire, so the status
+	// widget can show a countdown instead of just "waiting for model".
+	const selfPacedFireTimes = new Map<string, number>();
 	// Cron loops whose tick landed mid-turn; they fire when the agent goes idle.
 	const dueLoops = new Set<string>();
 	let ticker: ReturnType<typeof setInterval> | undefined;
@@ -220,9 +223,12 @@ export default function loopExtension(pi: ExtensionAPI) {
 		startTicker();
 		const lines = active.map((l) => {
 			const next = scheduler.nextFire(l.id);
+			const wakeup = selfPacedFireTimes.get(l.id);
 			const when =
 				l.trigger.type === "self-paced"
-					? "waiting for model"
+					? wakeup
+						? `wakeup in ${formatRemaining(wakeup - Date.now())}`
+						: "waiting for model"
 					: dueLoops.has(l.id)
 						? "due — fires when agent is idle"
 						: next
@@ -254,6 +260,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 		const t = selfPacedTimers.get(id);
 		if (t) clearTimeout(t);
 		selfPacedTimers.delete(id);
+		selfPacedFireTimes.delete(id);
 		dueLoops.delete(id);
 		const existed = store.delete(id);
 		if (existed) {
@@ -367,7 +374,14 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 			if (loops.length === 0) return Promise.resolve(textResult("No loops configured."));
 			const lines = loops.map((l) => {
 				const next = l.trigger.type === "cron" || l.trigger.type === "hybrid" ? scheduler.nextFire(l.id) : undefined;
-				const when = next ? ` · next ${formatRemaining(next - Date.now())}` : "";
+				const wakeup = l.trigger.type === "self-paced" ? selfPacedFireTimes.get(l.id) : undefined;
+				const when = next
+					? ` · next ${formatRemaining(next - Date.now())}`
+					: wakeup
+						? ` · wakeup in ${formatRemaining(wakeup - Date.now())}`
+						: l.trigger.type === "self-paced" && l.status === "active"
+							? " · waiting for model"
+							: "";
 				const fires = l.fireCount ? ` · ${l.fireCount} fires` : "";
 				return `#${l.id} [${l.status}] ${l.prompt.slice(0, 60)} (${describeTrigger(l.trigger)})${when}${fires}`;
 			});
@@ -424,12 +438,15 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 			if (existing) clearTimeout(existing);
 			const timer = setTimeout(() => {
 				selfPacedTimers.delete(entry.id);
+				selfPacedFireTimes.delete(entry.id);
 				const fresh = store.get(entry.id);
 				if (fresh && fresh.status === "active") fireSelfPacedNow(fresh);
 			}, delayMs);
 			(timer as { unref?: () => void }).unref?.();
 			selfPacedTimers.set(entry.id, timer);
-			const when = delayMs ? ` in ${delayMs / 1000}s` : "";
+			selfPacedFireTimes.set(entry.id, Date.now() + delayMs);
+			renderStatus();
+			const when = delayMs ? ` in ${formatRemaining(delayMs)}` : " on the next idle tick";
 			return Promise.resolve(textResult(`Loop #${entry.id} will continue${when}.`));
 		},
 	});
@@ -538,6 +555,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		triggers.stop();
 		for (const t of selfPacedTimers.values()) clearTimeout(t);
 		selfPacedTimers.clear();
+		selfPacedFireTimes.clear();
 		dueLoops.clear();
 
 		if (piLoopEnv !== "off") {
@@ -588,6 +606,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		triggers.stop();
 		for (const t of selfPacedTimers.values()) clearTimeout(t);
 		selfPacedTimers.clear();
+		selfPacedFireTimes.clear();
 		dueLoops.clear();
 		stopTicker();
 	});

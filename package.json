@@ -1,6 +1,6 @@
 {
   "name": "@koltmcbride/pi-loop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A pi coding-agent extension that runs a prompt repeatedly on a timer, pi event, or self-paced (Claude Code-style /loop)",
   "type": "module",
   "license": "MIT",

@@ -19,13 +19,13 @@ Earlier versions had a single **self-paced** mode: the model had to call a wakeu
 ## Features
 
 - **Fixed-interval loops** — `/loop 15m <prompt>` parses the interval into cron and runs it on a self-re-arming timer. Continuation is the default.
-- **Self-paced loops** — `/loop <prompt>` (no interval) fires once, then continues only if the model calls `schedule_loop_wakeup`. It may end the loop by not calling it.
+- **Self-paced loops** — `/loop <prompt>` (no interval) fires once, then continues only if the model calls `schedule_loop_wakeup`. It may end the loop by not calling it. When it schedules a wakeup with a delay, the status widget shows a live `wakeup in …` countdown so you can see when it'll fire next; until then it reads `waiting for model`.
 - **Event & hybrid triggers** — fire on a pi event (e.g. `tool_execution_end`, `turn_end`, `monitor:done`) instead of polling, or combine cron + event with debounce.
 - **Multiple loops** — run several at once; manage with `LoopCreate` / `LoopList` / `LoopDelete` or `/loop list`.
 - **Persistence** — loops are stored under `.pi/loops` and restored, if unexpired, on `--resume`/`--continue`.
 - **Safety caps** — per-loop `maxFires` and an automatic 7-day expiry; jittered fire times avoid API stampedes.
 - **Read-only mode** — restrict a loop's fires to read/inspection tools.
-- **Live status** — a footer indicator and widget list active loops with next-fire countdowns.
+- **Live status** — a footer indicator and widget list active loops with next-fire countdowns, including the `wakeup in …` time for a self-paced loop that has scheduled its next iteration.
 
 ## Installation
 
