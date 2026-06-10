@@ -165,12 +165,13 @@ test("model LoopDelete is REFUSED for a user-started loop — it keeps running",
 	assert.equal(sent.length, 2, "user-started loop keeps running despite the model's delete attempt");
 });
 
-test("auto-loop fire prompt does NOT instruct the model to stop", async () => {
+test("auto-loop fire prompt tells the model to just do the task, not manage the loop", async () => {
 	const { sent, command, ctx } = setup();
 	await command.handler("write the next highest number", ctx);
-	assert.doesNotMatch(sent[0].msg, /LoopDelete/, "must not invite the model to delete the loop");
-	assert.match(sent[0].msg, /keeps running until the user stops it/i);
-	assert.match(sent[0].msg, /should NOT stop the loop yourself/i);
+	assert.match(sent[0].msg, /runs until the user stops it/i);
+	// Must not invite the model to stop, pace, or reschedule — the foot-guns.
+	assert.match(sent[0].msg, /must NOT stop, pace, reschedule/i);
+	assert.match(sent[0].msg, /no LoopDelete, no schedule_loop_wakeup/i);
 });
 
 test("user /loop stop ends a loop", async () => {
@@ -205,14 +206,17 @@ test("interactive typing (takeover) stops the loop", async () => {
 	assert.equal(sent.length, 1, "takeover stops the loop");
 });
 
-test("schedule_loop_wakeup is optional cadence control, still schedules the next run", async () => {
-	const { sent, command, ctx, callTool } = setup();
+test("schedule_loop_wakeup is a no-op for a user /loop — model can't impose its own cadence", async () => {
+	const { sent, command, ctx, callTool, dispatch } = setup();
 	await command.handler("grind", ctx);
 	assert.equal(sent.length, 1);
 
-	// Calling it (delay 0) arms the next iteration immediately.
-	const res = await callTool("schedule_loop_wakeup", { delaySeconds: 0 });
-	assert.match(res, /will continue/i);
+	// Model tries to slow the loop to 5 minutes (the observed foot-gun).
+	const res = await callTool("schedule_loop_wakeup", { delaySeconds: 300 });
+	assert.match(res, /continues automatically|no action taken|cadence is the user/i);
+
+	// It did NOT impose the 5-min wait — auto-continue still drives the default gap.
+	await dispatch("agent_end");
 	await tick();
-	assert.equal(sent.length, 2, "wakeup scheduled the next iteration");
+	assert.equal(sent.length, 2, "loop keeps its own (user) cadence, not the model's 300s");
 });

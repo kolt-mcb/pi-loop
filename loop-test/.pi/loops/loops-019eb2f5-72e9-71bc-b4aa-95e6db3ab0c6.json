@@ -1,0 +1,19 @@
+{
+  "nextId": 2,
+  "loops": [
+    {
+      "id": "1",
+      "prompt": "write the next highest number into a count.txt file.",
+      "trigger": {
+        "type": "self-paced"
+      },
+      "status": "active",
+      "recurring": true,
+      "createdAt": 1781118907934,
+      "updatedAt": 1781120872038,
+      "expiresAt": 1781723707934,
+      "source": "command",
+      "fireCount": 24
+    }
+  ]
+}

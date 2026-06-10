@@ -64,7 +64,7 @@ const BRIDGED_EVENTS = [
 // quitting open-ended tasks ("this is infinite, so I'll stop"). Continuation is
 // unconditional; only the user ends it (/loop stop, or typing = takeover).
 const SELF_PACED_HINT =
-	"\n\n[Auto-looping task: this repeats automatically after each turn and keeps running until the user stops it. Just do this iteration's work and end your turn — you don't need to call anything to continue, and you should NOT stop the loop yourself even if the task looks open-ended or complete. To space out iterations, call schedule_loop_wakeup with delaySeconds.]";
+	"\n\n[Auto-looping task: this repeats automatically after each turn and runs until the user stops it. Do exactly one iteration's work now — read the current state, make the change, then END YOUR TURN. You don't need to call any tool to continue, and you must NOT stop, pace, reschedule, or otherwise manage the loop yourself (no LoopDelete, no schedule_loop_wakeup); the user controls cadence and stopping. Just do the task.]";
 
 // Gap before a self-paced loop auto-continues after a turn ends. Small by design:
 // the previous turn already did the work, so the next iteration starts promptly.
@@ -483,23 +483,31 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		name: "schedule_loop_wakeup",
 		label: "Schedule Loop Wakeup",
 		description:
-			"Optional cadence control for the active self-paced /loop. The loop ALREADY continues on its own after every turn — you do not need to call this to keep it alive. Call it only to set a custom gap before the next iteration (delaySeconds), e.g. to wait while something external finishes. A user-started /loop runs until the user stops it; do not try to end it yourself.",
-		promptSnippet: "Set a custom delay before a self-paced /loop's next auto-iteration.",
+			"Do NOT call this. A /loop continues on its own after every turn and its cadence is controlled by the user, not the model — this tool is a no-op for user-started loops. Calling it does nothing except waste a turn; just do the task and end your turn.",
+		promptSnippet: undefined,
 		promptGuidelines: [
-			"A self-paced /loop continues automatically — do NOT call schedule_loop_wakeup just to keep it going.",
-			"Use it only to lengthen the gap before the next iteration (delaySeconds), e.g. 900 to wait 15 minutes.",
-			"A user-started /loop is ended by the user, not by you — never call LoopDelete on it even if the task looks open-ended or finished.",
+			"Never call schedule_loop_wakeup for a /loop — it continues automatically and its cadence/stopping are the user's, not yours. Just do the task and end your turn.",
 		],
 		parameters: Type.Object({
-			reason: Type.Optional(Type.String({ description: "Why this cadence (for your own tracking)." })),
-			delaySeconds: Type.Optional(Type.Number({ description: "Delay before the next iteration, in seconds. Defaults to the loop's normal auto-continue gap." })),
-			loopId: Type.Optional(Type.String({ description: "Which self-paced loop to schedule (defaults to the one that just fired)." })),
+			reason: Type.Optional(Type.String({ description: "Unused." })),
+			delaySeconds: Type.Optional(Type.Number({ description: "Unused for user-started loops." })),
+			loopId: Type.Optional(Type.String({ description: "Which loop (defaults to the one that just fired)." })),
 		}),
 		execute: (_id, params) => {
 			const targetId = params.loopId ?? lastSelfPacedId;
 			const entry = targetId ? store.get(targetId) : undefined;
 			if (!entry || entry.trigger.type !== "self-paced" || entry.status !== "active") {
-				return Promise.resolve(textResult("No active self-paced loop to schedule; ignoring."));
+				return Promise.resolve(textResult("No active self-paced loop; ignoring."));
+			}
+			// A user-started /loop owns its own cadence (auto-continue at
+			// PI_LOOP_CONTINUE_MS). The model fixating on this tool — pacing to 5min,
+			// or spamming it instead of doing the task — is a foot-gun, so it's a no-op.
+			if (entry.source === "command") {
+				return Promise.resolve(
+					textResult(
+						`Loop #${entry.id} continues automatically; its cadence is the user's (PI_LOOP_CONTINUE_MS), not yours. No action taken — just do the task and end your turn.`,
+					),
+				);
 			}
 			const delayMs =
 				params.delaySeconds === undefined

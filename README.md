@@ -6,7 +6,7 @@ A [pi](https://github.com/earendil-works/pi) extension that runs a prompt **repe
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
 [![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
-[![Version](https://img.shields.io/badge/version-%40v0.3.1-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.1)
+[![Version](https://img.shields.io/badge/version-%40v0.3.2-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.2)
 
 Schedule a prompt to run repeatedly inside pi. Whether driven by a timer or by the agent itself, **the model is never responsible for keeping a loop alive** — the harness re-fires it, and it stops only on an explicit signal.
 
@@ -14,7 +14,7 @@ Schedule a prompt to run repeatedly inside pi. Whether driven by a timer or by t
 
 Self-paced `/loop <prompt>` is now **auto-continuing and runs indefinitely**: after every turn the harness re-fires it on its own, and **only the user ends it** — `/loop stop`, or typing anything (a takeover). The model cannot end a user-started loop: it is told not to, and `LoopDelete` on a `/loop` is refused. Previously the model had to call a wakeup tool at the *end of every turn* or the loop silently died — a protocol weaker models (and a turn that ends on a summary) routinely dropped; worse, even after auto-continue landed, a hint inviting the model to "stop when the goal is reached" made it quit open-ended tasks ("this is infinite, so I'll stop").
 
-This mirrors how Codex / Claude Code agent loops behave: **continuation is the default; the human decides when it's done.** `schedule_loop_wakeup` is kept but demoted to an optional cadence control — call it only to lengthen the gap before the next iteration; you never need it to stay alive.
+This mirrors how Codex / Claude Code agent loops behave: **continuation is the default; the human decides when it's done.** The model's loop-control surface for a user `/loop` is removed entirely — it can't stop it (`LoopDelete` refused), can't pace it, and can't reschedule it (`schedule_loop_wakeup` is a no-op). Weaker models otherwise fixate on those tools (pacing to 5min, or spamming a wakeup) instead of doing the task. Cadence is the user's, via `PI_LOOP_CONTINUE_MS`.
 
 ### 0.2.x foundations
 
@@ -36,7 +36,7 @@ This mirrors how Codex / Claude Code agent loops behave: **continuation is the d
 ```bash
 pi install npm:@koltmcbride/pi-loop
 # or
-pi install git:github.com/kolt-mcb/pi-loop@v0.3.1
+pi install git:github.com/kolt-mcb/pi-loop@v0.3.2
 ```
 
 Verify it's loaded with `pi list`.
@@ -80,7 +80,7 @@ Intervals use `s` / `m` / `h` / `d`. Sub-minute rounds up to one minute (cron's 
 | `LoopCreate` | Schedule a loop on a cron timer, a pi event, or a hybrid of both. Supports `recurring`, `readOnly`, `maxFires`, `filter`. |
 | `LoopList` | List loops with ids, triggers, fire counts, next-fire times. |
 | `LoopDelete` | Delete a loop, or `action="pause"` to keep it without firing. |
-| `schedule_loop_wakeup` | Optional cadence control for an auto-continuing loop — set a custom `delaySeconds` before the next iteration. Not needed to keep it alive; use `LoopDelete` to stop. |
+| `schedule_loop_wakeup` | No-op for a user `/loop` (kept only so a stray call doesn't error). A `/loop`'s cadence is the user's, set via `PI_LOOP_CONTINUE_MS` — the model can't pace or reschedule it. |
 
 Trigger types: `cron` (`5m`, `1h`, `0 9 * * 1-5`), `event` (any pi event-bus channel; lifecycle events `tool_execution_start/end`, `turn_start/end`, `agent_start/end`, `message_end` are bridged through), or `hybrid` (both, debounced).
 
