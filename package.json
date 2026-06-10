@@ -1,6 +1,6 @@
 {
   "name": "@koltmcbride/pi-loop",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "A pi coding-agent extension that runs a prompt repeatedly on a timer, pi event, or self-paced (Claude Code-style /loop)",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "test:e2e": "tsx --test test/loop.e2e.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

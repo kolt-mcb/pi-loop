@@ -57,26 +57,12 @@ const BRIDGED_EVENTS = [
 	"message_end",
 ] as const;
 
-// Auto-continuing loops keep going on their own (the harness re-fires after each
-// turn) and run until the USER stops them — the model neither keeps them alive
-// nor decides to end them. The hint deliberately does NOT invite the model to
-// stop: telling it to "LoopDelete when the goal is achieved" made it rationalize
-// quitting open-ended tasks ("this is infinite, so I'll stop"). Continuation is
-// unconditional; only the user ends it (/loop stop, or typing = takeover).
+// Model-driven self-paced loop (Claude Code /loop style): the model continues
+// the loop by calling schedule_loop_wakeup at the end of its turn, and ends it
+// by NOT calling it (omit-to-end). The harness does not auto-continue — this is
+// a faithful test of whether a clean, model-driven prompt holds up.
 const SELF_PACED_HINT =
-	"\n\n[Auto-looping task: this repeats automatically after each turn and runs until the user stops it. Do exactly one iteration's work now — read the current state, make the change, then END YOUR TURN. You don't need to call any tool to continue, and you must NOT stop, pace, reschedule, or otherwise manage the loop yourself (no LoopDelete, no schedule_loop_wakeup); the user controls cadence and stopping. Just do the task.]";
-
-// Gap before a self-paced loop auto-continues after a turn ends. Small by design:
-// the previous turn already did the work, so the next iteration starts promptly.
-// Override per-iteration with schedule_loop_wakeup(delaySeconds), or globally with
-// PI_LOOP_CONTINUE_MS.
-const SELF_PACED_CONTINUE_MS = (() => {
-	const raw = Number(process.env.PI_LOOP_CONTINUE_MS);
-	return Number.isFinite(raw) && raw >= 0 ? raw : 5000;
-})();
-
-const READONLY_NOTE =
-	"\n\nREAD-ONLY MODE — use only read/inspection tools. No file writes, shell execution, or destructive changes.";
+	"\n\n[Self-paced loop: do this iteration's work, then call schedule_loop_wakeup at the end of your turn to run the next iteration. Omit the call to end the loop. Once the loop starts you will not stop unless specificly indicated to.]";
 
 function textResult(message: string): AgentToolResult<unknown> {
 	return { content: [{ type: "text", text: message }], details: undefined } as AgentToolResult<unknown>;
@@ -133,8 +119,13 @@ export default function loopExtension(pi: ExtensionAPI) {
 	let lastSelfPacedId: string | undefined;
 	const selfPacedTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	// Wall-clock ms a self-paced loop's next iteration will fire, so the status
-	// widget can show a live countdown to the auto-continue.
+	// widget can show a live countdown to the next run.
 	const selfPacedFireTimes = new Map<string, number>();
+	// Self-paced loops the model asked to continue THIS turn (via
+	// schedule_loop_wakeup), mapped to the requested delay. Read + cleared at
+	// agent_end: present → arm the next iteration; absent → the model omitted the
+	// call, so the loop ends (Claude-style omit-to-end).
+	const scheduledThisTurn = new Map<string, number>();
 	// Cron loops whose tick landed mid-turn; they fire when the agent goes idle.
 	const dueLoops = new Set<string>();
 	let ticker: ReturnType<typeof setInterval> | undefined;
@@ -203,7 +194,6 @@ export default function loopExtension(pi: ExtensionAPI) {
 	// when idle, otherwise lands right after the current turn).
 	pi.events.on("loop:fire", (raw: unknown) => {
 		const data = raw as LoopFireEvent;
-		const constraint = data.readOnly ? READONLY_NOTE : "";
 		const selfPaced = data.trigger.type === "self-paced";
 		const hint = selfPaced ? SELF_PACED_HINT : "";
 		// Self-paced loops lead with the climbing iteration count (matches the
@@ -212,7 +202,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 		const header = selfPaced
 			? `[pi-loop] Iteration #${data.iteration ?? 1} (self-paced).`
 			: `[pi-loop] Loop #${data.loopId} fired (${describeTrigger(data.trigger)}).`;
-		const message = `${header}${constraint}\n\n${data.prompt}${hint}`;
+		const message = `${header}\n\n${data.prompt}${hint}`;
 		pi.sendUserMessage(message, { deliverAs: "followUp" });
 		renderStatus();
 	});
@@ -254,23 +244,23 @@ export default function loopExtension(pi: ExtensionAPI) {
 		renderStatus();
 	}
 
-	// Continuation is the harness's job: when a turn ends, re-arm every active
-	// self-paced loop that the model didn't already schedule, so the loop survives
-	// even if the model never calls schedule_loop_wakeup. The loop ends only on an
-	// explicit signal — LoopDelete (model: "goal reached"), /loop stop, takeover,
-	// maxFires, or expiry.
-	function autoContinueSelfPaced(): void {
-		// A fire (or a user message) is already queued — let its turn-end drive the
-		// next continuation rather than arming one now, so iterations never stack.
-		if (latestCtx?.hasPendingMessages()) return;
+	// Continuation is the MODEL's job (Claude-style): at the end of a turn, a
+	// self-paced loop continues only if the model called schedule_loop_wakeup
+	// (recorded in scheduledThisTurn); otherwise it ends. No harness auto-continue.
+	function continueOrEndSelfPaced(): void {
 		for (const l of store.listActive()) {
 			if (l.trigger.type !== "self-paced") continue;
-			if (selfPacedTimers.has(l.id)) continue; // model already set the next iteration
+			const delay = scheduledThisTurn.get(l.id);
+			scheduledThisTurn.delete(l.id);
+			if (delay === undefined) {
+				stopLoop(l.id, "loop ended — no schedule_loop_wakeup call");
+				continue;
+			}
 			if (l.maxFires && (l.fireCount ?? 0) >= l.maxFires) {
 				stopLoop(l.id, "maxFires reached");
 				continue;
 			}
-			armSelfPacedWakeup(l.id, SELF_PACED_CONTINUE_MS);
+			armSelfPacedWakeup(l.id, delay);
 		}
 	}
 
@@ -331,6 +321,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 		if (t) clearTimeout(t);
 		selfPacedTimers.delete(id);
 		selfPacedFireTimes.delete(id);
+		scheduledThisTurn.delete(id);
 		dueLoops.delete(id);
 		const existed = store.delete(id);
 		if (existed) {
@@ -470,16 +461,6 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		execute: (_id, params) => {
 			const entry = store.get(params.id);
 			if (!entry) return Promise.resolve(textResult(`Loop #${params.id} not found.`));
-			// A user-started /loop is the user's to end, not the model's — refuse so an
-			// open-ended task can't be quit by the agent deciding it's "done". The user
-			// always has instant control (/loop stop, or typing = takeover).
-			if (entry.source === "command") {
-				return Promise.resolve(
-					textResult(
-						`Loop #${params.id} was started by the user with /loop and runs until they stop it (/loop stop ${params.id}). Leaving it running — keep working on the task.`,
-					),
-				);
-			}
 			if (params.action === "pause") {
 				triggers.remove(params.id);
 				store.setStatus(params.id, "paused");
@@ -494,16 +475,29 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 	pi.registerTool({
 		name: "schedule_loop_wakeup",
 		label: "Schedule Loop Wakeup",
-		description:
-			"Do NOT call this. A /loop continues on its own after every turn and its cadence is controlled by the user, not the model — this tool is a no-op for user-started loops. Calling it does nothing except waste a turn; just do the task and end your turn.",
-		promptSnippet: undefined,
+		description: `Schedule when to resume work in this self-paced /loop — you invoked /loop to self-pace iterations of a specific task.
+
+Call this at the end of your turn to run the next iteration. Omit the call to end the loop.
+
+## Picking delaySeconds
+
+- 0 — continue immediately. The default; right for ongoing local work with nothing to wait on.
+- A positive value — wait that long before the next iteration, when there's no point continuing sooner: polling something external (a file, a build, a remote state) that changes on its own schedule.
+
+Think about what you're actually waiting for, not just "how long should I sleep." If you're polling something that updates every few minutes, match the delay to that; if you're just doing the next unit of work, use 0.
+
+## The reason field
+
+One short sentence on what you chose and why. It's shown back to the user, so make it specific — "incremented the counter to 5" beats "continuing".`,
+		promptSnippet: "Continue a self-paced /loop by scheduling the next iteration (omit to end).",
 		promptGuidelines: [
-			"Never call schedule_loop_wakeup for a /loop — it continues automatically and its cadence/stopping are the user's, not yours. Just do the task and end your turn.",
+			"In a self-paced /loop, call schedule_loop_wakeup once at the end of your turn to run the next iteration; omit it to end the loop.",
+			"Use delaySeconds 0 to continue immediately, or a positive value to wait before the next iteration.",
 		],
 		parameters: Type.Object({
-			reason: Type.Optional(Type.String({ description: "Unused." })),
-			delaySeconds: Type.Optional(Type.Number({ description: "Unused for user-started loops." })),
-			loopId: Type.Optional(Type.String({ description: "Which loop (defaults to the one that just fired)." })),
+			reason: Type.Optional(Type.String({ description: "One short, specific sentence on what you chose and why (shown to the user)." })),
+			delaySeconds: Type.Optional(Type.Number({ description: "Gap before the next iteration. 0 (default) = immediately." })),
+			loopId: Type.Optional(Type.String({ description: "Which self-paced loop to continue (defaults to the one that just fired)." })),
 		}),
 		execute: (_id, params) => {
 			const targetId = params.loopId ?? lastSelfPacedId;
@@ -511,22 +505,13 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 			if (!entry || entry.trigger.type !== "self-paced" || entry.status !== "active") {
 				return Promise.resolve(textResult("No active self-paced loop; ignoring."));
 			}
-			// A user-started /loop owns its own cadence (auto-continue at
-			// PI_LOOP_CONTINUE_MS). The model fixating on this tool — pacing to 5min,
-			// or spamming it instead of doing the task — is a foot-gun, so it's a no-op.
-			if (entry.source === "command") {
-				return Promise.resolve(
-					textResult(
-						`Loop #${entry.id} continues automatically; its cadence is the user's (PI_LOOP_CONTINUE_MS), not yours. No action taken — just do the task and end your turn.`,
-					),
-				);
-			}
-			const delayMs =
-				params.delaySeconds === undefined
-					? SELF_PACED_CONTINUE_MS
-					: Math.max(0, Math.round(params.delaySeconds * 1000));
-			armSelfPacedWakeup(entry.id, delayMs);
-			return Promise.resolve(textResult(`Loop #${entry.id} will continue in ${formatRemaining(delayMs)}.`));
+			const delayMs = Math.max(0, Math.round((params.delaySeconds ?? 0) * 1000));
+			// Record the intent; the next iteration is actually armed at agent_end (so
+			// a delay=0 timer can't fire mid-turn and race the omit-to-end decision).
+			scheduledThisTurn.set(entry.id, delayMs);
+			if (params.reason) notify(`Loop #${entry.id}: ${params.reason}`);
+			const when = delayMs ? ` in ${formatRemaining(delayMs)}` : " immediately";
+			return Promise.resolve(textResult(`Loop #${entry.id} will run its next iteration${when} (after this turn).`));
 		},
 	});
 
@@ -635,6 +620,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		for (const t of selfPacedTimers.values()) clearTimeout(t);
 		selfPacedTimers.clear();
 		selfPacedFireTimes.clear();
+		scheduledThisTurn.clear();
 		dueLoops.clear();
 
 		if (piLoopEnv !== "off") {
@@ -661,7 +647,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 	pi.on("agent_end", async (_event, ctx) => {
 		captureCtx(ctx);
 		deliverDue();
-		autoContinueSelfPaced();
+		continueOrEndSelfPaced();
 	});
 
 	// Typing while a self-paced loop is waiting ends it — you took over. Fixed and
@@ -687,6 +673,7 @@ Prefer LoopCreate over raw Bash sleep/while loops: it survives across turns and 
 		for (const t of selfPacedTimers.values()) clearTimeout(t);
 		selfPacedTimers.clear();
 		selfPacedFireTimes.clear();
+		scheduledThisTurn.clear();
 		dueLoops.clear();
 		stopTicker();
 	});

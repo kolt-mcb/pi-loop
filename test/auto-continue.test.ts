@@ -119,78 +119,63 @@ test("self-paced /loop fires immediately on creation", async () => {
 	assert.match(sent[0].msg, /fix decomp diffs/);
 });
 
-test("auto-continues after each turn with NO schedule_loop_wakeup call", async () => {
+test("ENDS if the model does NOT call schedule_loop_wakeup (omit-to-end)", async () => {
 	const { sent, command, ctx, dispatch, callTool } = setup();
 	await command.handler("grind the decomp", ctx);
 	assert.equal(sent.length, 1, "first fire on creation");
 
-	// Turn ends, model called nothing. Harness must re-fire on its own.
+	// Turn ends, model called nothing → loop ends, no re-fire.
 	await dispatch("agent_end");
 	await tick();
-	assert.equal(sent.length, 2, "auto-continued without a wakeup call");
+	assert.equal(sent.length, 1, "no continuation scheduled → no re-fire");
+	const list = await callTool("LoopList", {});
+	assert.match(list, /No loops configured/i, "the loop is gone");
+});
 
-	// And keeps going turn after turn.
+test("CONTINUES turn after turn when the model calls schedule_loop_wakeup", async () => {
+	const { sent, command, ctx, dispatch, callTool } = setup();
+	await command.handler("grind the decomp", ctx);
+	assert.equal(sent.length, 1, "first fire on creation");
+
+	// Model schedules the next iteration, then the turn ends → it fires.
+	await callTool("schedule_loop_wakeup", { delaySeconds: 0 });
 	await dispatch("agent_end");
 	await tick();
+	assert.equal(sent.length, 2, "continued because the model scheduled a wakeup");
+
+	// Keeps going as long as the model keeps calling it.
+	await callTool("schedule_loop_wakeup", { delaySeconds: 0 });
 	await dispatch("agent_end");
 	await tick();
-	assert.equal(sent.length, 4, "keeps auto-continuing");
-	// Each fire's header carries the climbing iteration number, so consecutive
-	// fires read #1, #2, #3, #4 — not the same "Loop #1" repeated.
+	await callTool("schedule_loop_wakeup", { delaySeconds: 0 });
+	await dispatch("agent_end");
+	await tick();
+	assert.equal(sent.length, 4, "keeps continuing per the model's calls");
 	assert.match(sent[0].msg, /Iteration #1 \(self-paced\)/);
 	assert.match(sent[3].msg, /Iteration #4 \(self-paced\)/);
 
-	// fireCount reflects delivered fires (the user's question).
 	const list = await callTool("LoopList", {});
 	assert.match(list, /4 fires/);
 });
 
-test("does not stack fires when a message is already pending", async () => {
-	const { sent, command, ctx, dispatch } = setup({ hasPendingMessages: () => true });
-	await command.handler("grind", ctx);
-	assert.equal(sent.length, 1);
-
-	// agent_end fires while a message is queued — should NOT arm another iteration.
-	await dispatch("agent_end");
-	await dispatch("agent_end");
-	await dispatch("agent_end");
-	await tick();
-	assert.equal(sent.length, 1, "no extra fires while pending");
-});
-
-test("model LoopDelete is REFUSED for a user-started loop — it keeps running", async () => {
-	const { sent, command, ctx, dispatch, callTool } = setup();
-	await command.handler("write the next number forever", ctx);
-	assert.equal(sent.length, 1);
-
-	// The model decides the open-ended task is "done" and tries to stop it.
-	const res = await callTool("LoopDelete", { id: "1" });
-	assert.match(res, /started by the user|runs until they stop|Leaving it running/i);
-
-	// It must keep firing regardless.
-	await dispatch("agent_end");
-	await tick();
-	assert.equal(sent.length, 2, "user-started loop keeps running despite the model's delete attempt");
-});
-
 test("self-paced widget leads with the climbing iteration count (not the loop id)", async () => {
-	const { command, ctx, dispatch, widget } = setup();
+	const { command, ctx, dispatch, callTool, widget } = setup();
 	await command.handler("write the next highest number into a count.txt file", ctx);
 	assert.match(widget.lines[0], /^⟳ #1 /, "first iteration shows #1");
 	assert.doesNotMatch(widget.lines[0], /auto-continues|\d×/, "no 'auto-continues' / 'N×' noise");
 
+	await callTool("schedule_loop_wakeup", { delaySeconds: 0 });
 	await dispatch("agent_end");
 	await tick();
 	assert.match(widget.lines[0], /^⟳ #2 /, "iteration climbs to #2 on the next run");
 });
 
-test("auto-loop fire prompt tells the model to just do the task, not manage the loop", async () => {
+test("self-paced fire prompt is the model-driven (omit-to-end) hint", async () => {
 	const { sent, command, ctx } = setup();
 	await command.handler("write the next highest number", ctx);
-	assert.match(sent[0].msg, /runs until the user stops it/i);
-	// Must not invite the model to stop, pace, or reschedule — the foot-guns.
-	assert.match(sent[0].msg, /must NOT stop, pace, reschedule/i);
-	assert.match(sent[0].msg, /no LoopDelete, no schedule_loop_wakeup/i);
+	assert.match(sent[0].msg, /Self-paced loop/i);
+	assert.match(sent[0].msg, /schedule_loop_wakeup at the end of your turn/i);
+	assert.match(sent[0].msg, /Omit the call to end the loop/i);
 });
 
 test("user /loop stop ends a loop", async () => {
@@ -204,12 +189,27 @@ test("user /loop stop ends a loop", async () => {
 	assert.equal(sent.length, 1, "the user (via /loop stop) ends it");
 });
 
-test("model CAN still delete its own tool-created loop (guard is scoped to /loop)", async () => {
+test("model can LoopDelete a user-started /loop (and stop it)", async () => {
+	const { sent, command, ctx, dispatch, callTool } = setup();
+	await command.handler("grind", ctx);
+	assert.equal(sent.length, 1);
+
+	const del = await callTool("LoopDelete", { id: "1" });
+	assert.match(del, /deleted/i, "the agent may end a user /loop when it decides to");
+
+	// Deleted loop does not fire again.
+	await callTool("schedule_loop_wakeup", { delaySeconds: 0 });
+	await dispatch("agent_end");
+	await tick();
+	assert.equal(sent.length, 1, "no re-fire after delete");
+});
+
+test("model can also delete its own tool-created loop", async () => {
 	const { callTool } = setup();
 	const created = await callTool("LoopCreate", { trigger: "5m", prompt: "poll something" });
 	assert.match(created, /Loop #1 created/i);
 	const del = await callTool("LoopDelete", { id: "1" });
-	assert.match(del, /deleted/i, "tool-created loops remain model-deletable");
+	assert.match(del, /deleted/i);
 });
 
 test("interactive typing (takeover) stops the loop", async () => {
@@ -225,17 +225,17 @@ test("interactive typing (takeover) stops the loop", async () => {
 	assert.equal(sent.length, 1, "takeover stops the loop");
 });
 
-test("schedule_loop_wakeup is a no-op for a user /loop — model can't impose its own cadence", async () => {
-	const { sent, command, ctx, callTool, dispatch } = setup();
-	await command.handler("grind", ctx);
+test("schedule_loop_wakeup with a delay shows a 'next in' countdown and doesn't fire early", async () => {
+	const { sent, command, ctx, callTool, dispatch, widget } = setup();
+	await command.handler("poll the build", ctx);
 	assert.equal(sent.length, 1);
 
-	// Model tries to slow the loop to 5 minutes (the observed foot-gun).
-	const res = await callTool("schedule_loop_wakeup", { delaySeconds: 300 });
-	assert.match(res, /continues automatically|no action taken|cadence is the user/i);
-
-	// It did NOT impose the 5-min wait — auto-continue still drives the default gap.
+	// Model asks to wait 5 minutes before the next iteration.
+	const res = await callTool("schedule_loop_wakeup", { delaySeconds: 300, reason: "waiting for the build" });
+	assert.match(res, /next iteration in/i);
 	await dispatch("agent_end");
 	await tick();
-	assert.equal(sent.length, 2, "loop keeps its own (user) cadence, not the model's 300s");
+	// It armed a 5-min timer — no immediate re-fire, and the widget shows the wait.
+	assert.equal(sent.length, 1, "does not fire before the delay elapses");
+	assert.match(widget.lines[0], /next in/i);
 });
