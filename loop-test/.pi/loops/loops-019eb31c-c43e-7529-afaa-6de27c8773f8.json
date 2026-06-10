@@ -9,11 +9,11 @@
       },
       "status": "active",
       "recurring": true,
-      "createdAt": 1781118907934,
-      "updatedAt": 1781120872038,
-      "expiresAt": 1781723707934,
+      "createdAt": 1781121486515,
+      "updatedAt": 1781121582861,
+      "expiresAt": 1781726286515,
       "source": "command",
-      "fireCount": 24
+      "fireCount": 6
     }
   ]
 }

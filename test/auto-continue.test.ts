@@ -38,9 +38,9 @@ function makeEvents() {
 function makeCtx(overrides: Record<string, unknown> = {}) {
 	return {
 		ui: {
-			notify() {},
-			setStatus() {},
-			setWidget() {},
+			notify(_msg?: unknown, _type?: unknown) {},
+			setStatus(_key?: unknown, _val?: unknown) {},
+			setWidget(_key?: unknown, _val?: unknown) {},
 			select: async () => "",
 		},
 		hasUI: true,
@@ -90,6 +90,11 @@ function setup(ctxOverrides: Record<string, unknown> = {}) {
 	loopExtension(pi as any);
 
 	const ctx = makeCtx(ctxOverrides);
+	// Capture the latest status-widget lines for assertions.
+	const widget: { lines: string[] } = { lines: [] };
+	ctx.ui.setWidget = (_key: string, lines: unknown) => {
+		widget.lines = Array.isArray(lines) ? (lines as string[]) : [];
+	};
 	const dispatch = async (event: string, ev?: unknown) => {
 		for (const h of lifecycle.get(event) ?? []) await h(ev ?? { type: event }, ctx);
 	};
@@ -99,7 +104,7 @@ function setup(ctxOverrides: Record<string, unknown> = {}) {
 		const res = await t.execute("call-id", params);
 		return res.content.map((c) => c.text).join("\n");
 	};
-	return { sent, tools, command: command!, ctx, dispatch, callTool };
+	return { sent, tools, command: command!, ctx, dispatch, callTool, widget };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
@@ -163,6 +168,17 @@ test("model LoopDelete is REFUSED for a user-started loop — it keeps running",
 	await dispatch("agent_end");
 	await tick();
 	assert.equal(sent.length, 2, "user-started loop keeps running despite the model's delete attempt");
+});
+
+test("self-paced widget leads with the climbing iteration count (not the loop id)", async () => {
+	const { command, ctx, dispatch, widget } = setup();
+	await command.handler("write the next highest number into a count.txt file", ctx);
+	assert.match(widget.lines[0], /^⟳ #1 /, "first iteration shows #1");
+	assert.doesNotMatch(widget.lines[0], /auto-continues|\d×/, "no 'auto-continues' / 'N×' noise");
+
+	await dispatch("agent_end");
+	await tick();
+	assert.match(widget.lines[0], /^⟳ #2 /, "iteration climbs to #2 on the next run");
 });
 
 test("auto-loop fire prompt tells the model to just do the task, not manage the loop", async () => {

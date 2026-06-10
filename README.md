@@ -6,7 +6,7 @@ A [pi](https://github.com/earendil-works/pi) extension that runs a prompt **repe
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/kolt-mcb/pi-loop/blob/main/LICENSE)
 [![pi-package](https://img.shields.io/badge/pi-package-orange.svg)](https://pi.dev/packages)
-[![Version](https://img.shields.io/badge/version-%40v0.3.2-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.2)
+[![Version](https://img.shields.io/badge/version-%40v0.3.3-blue.svg)](https://github.com/kolt-mcb/pi-loop/releases/tag/v0.3.3)
 
 Schedule a prompt to run repeatedly inside pi. Whether driven by a timer or by the agent itself, **the model is never responsible for keeping a loop alive** — the harness re-fires it, and it stops only on an explicit signal.
 
@@ -29,14 +29,14 @@ This mirrors how Codex / Claude Code agent loops behave: **continuation is the d
 - **Persistence** — loops are stored under `.pi/loops` and restored, if unexpired, on `--resume`/`--continue`.
 - **Safety caps** — per-loop `maxFires` and an automatic 7-day expiry; jittered fire times avoid API stampedes.
 - **Read-only mode** — restrict a loop's fires to read/inspection tools.
-- **Live status** — a footer indicator and widget list active loops with next-fire countdowns, including the `next in …` time before an auto-continuing loop's next iteration.
+- **Live status** — a footer indicator and widget list active loops with next-fire countdowns. An auto-continuing loop leads with its climbing iteration count (`⟳ #2 … · next in 4s`); the loop id is shown in `/loop list`.
 
 ## Installation
 
 ```bash
 pi install npm:@koltmcbride/pi-loop
 # or
-pi install git:github.com/kolt-mcb/pi-loop@v0.3.2
+pi install git:github.com/kolt-mcb/pi-loop@v0.3.3
 ```
 
 Verify it's loaded with `pi list`.

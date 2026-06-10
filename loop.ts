@@ -282,20 +282,24 @@ export default function loopExtension(pi: ExtensionAPI) {
 		const lines = active.map((l) => {
 			const next = scheduler.nextFire(l.id);
 			const wakeup = selfPacedFireTimes.get(l.id);
-			const when =
-				l.trigger.type === "self-paced"
-					? wakeup
-						? `next in ${formatRemaining(wakeup - Date.now())}`
-						: "running · auto-continues"
-					: dueLoops.has(l.id)
-						? "due — fires when agent is idle"
-						: next
-							? `next ${formatRemaining(next - Date.now())}`
-							: l.trigger.type === "event"
-								? "on event"
-								: "pending";
-			const fires = l.maxFires ? ` ${l.fireCount ?? 0}/${l.maxFires}` : l.fireCount ? ` ${l.fireCount}×` : "";
-			return `⟳ #${l.id} ${l.prompt.slice(0, 48)} — ${describeTrigger(l.trigger)} · ${when}${fires}`;
+			const isSelfPaced = l.trigger.type === "self-paced";
+			const when = isSelfPaced
+				? wakeup
+					? `next in ${formatRemaining(wakeup - Date.now())}`
+					: "running"
+				: dueLoops.has(l.id)
+					? "due — fires when agent is idle"
+					: next
+						? `next ${formatRemaining(next - Date.now())}`
+						: l.trigger.type === "event"
+							? "on event"
+							: "pending";
+			// Self-paced loops lead with the climbing iteration count (#1 → #2 → …) —
+			// the stable loop id lives in /loop list. Other loops lead with their id
+			// plus a fire tally.
+			const lead = isSelfPaced ? `#${l.fireCount ?? 0}` : `#${l.id}`;
+			const fires = isSelfPaced ? "" : l.maxFires ? ` ${l.fireCount ?? 0}/${l.maxFires}` : l.fireCount ? ` ${l.fireCount}×` : "";
+			return `⟳ ${lead} ${l.prompt.slice(0, 48)} — ${describeTrigger(l.trigger)} · ${when}${fires}`;
 		});
 		latestUI.setWidget(STATUS_KEY, lines);
 	}
